@@ -11,13 +11,15 @@ def startup(): init_db(); build_forecasts()
 def fcs(chamber=None): return [x for x in build_forecasts() if not chamber or x['race_id'].startswith(chamber)]
 @app.get('/',response_class=HTMLResponse)
 def home(): return '''<!doctype html><title>Congressional Forecast Lab</title><style>body{font:16px system-ui;max-width:1100px;margin:auto;background:#09111f;color:#e7eefb;padding:2rem}.banner{background:#8b3b12;padding:1rem;border-radius:8px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem}.card{background:#15233a;padding:1rem;border-radius:8px}a{color:#7fcbff}</style><h1>Congressional Forecast Lab</h1><p class=banner><b>DEMO MODE — not live forecasting data.</b> Synthetic deterministic inputs demonstrate the system; sources and timestamps are visible through the API.</p><div id=x class=grid></div><p><a href=/docs>OpenAPI</a> · <a href=/api/races?chamber=house>House races</a> · <a href=/api/research>Research Registry</a> · <a href=/api/models>Model Laboratory</a></p><script>Promise.all(['/api/forecast/control','/api/data-health']).then(x=>Promise.all(x.map(r=>r.json()))).then(([d,h])=>x.innerHTML=`<div class=card><h2>House</h2><b>${(d.house.democratic_control_probability*100).toFixed(1)}%</b> Democratic control</div><div class=card><h2>Senate</h2><b>${(d.senate.democratic_control_probability*100).toFixed(1)}%</b> Democratic control</div><div class=card><h2>Data health</h2>${h.mode}<br>${h.warning}</div>`)</script>'''
+# Static forecast routes must be registered before the dynamic chamber route.
+# Otherwise FastAPI treats ``control`` as a chamber value and returns a 404.
+@app.get('/api/forecast/control')
+def control():
+ return {'mode':'demo','house':simulate_control(fcs('house'),'house'),'senate':simulate_control(fcs('senate'),'senate',base_dem_seats=34)}
 @app.get('/api/forecast/{chamber}')
 def forecast(chamber:str):
  if chamber not in ('house','senate'): raise HTTPException(404)
  return {'mode':'demo','model_version':'2026.1','data_version':'demo-2026.1','forecasts':fcs(chamber)}
-@app.get('/api/forecast/control')
-def control():
- return {'mode':'demo','house':simulate_control(fcs('house'),'house'),'senate':simulate_control(fcs('senate'),'senate',base_dem_seats=34)}
 @app.get('/api/races')
 def list_races(chamber:str|None=None,state:str|None=None):
  return [r for r in races(chamber) if not state or r['state']==state]

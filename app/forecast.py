@@ -39,6 +39,80 @@ SENATE_CLASS2 = ["AL", "AK", "AR", "CO", "DE", "GA", "ID", "IL", "IA", "KS",
 
 RANKED_CHOICE_STATES = {"AK", "ME"}
 
+# Research registry: every claim from the project mandate that the current
+# system operationalizes, with its honest lifecycle status. Validation always
+# points at stored, queryable evidence — never at prose.
+RESEARCH_CLAIMS = [
+    {"id": "H-001", "claim": "Seat partisan history (prior result) is a strong initial baseline.",
+     "chamber": "both", "metric": "prior_margin",
+     "mechanism": "Partisan alignment persists between cycles",
+     "status": "Production",
+     "validation": "Expanding-window: compare champion vs baseline-prior-result at /api/models/comparison",
+     "decision": "Included in both chamber models", "source": "Project research mandate"},
+    {"id": "H-002", "claim": "District polling deserves more weight closer to Election Day.",
+     "chamber": "both", "metric": "poll_average (21-day half-life decay)",
+     "mechanism": "Recent opinion measures current candidate standing",
+     "status": "Production",
+     "validation": "Horizon breakdown (0/30/90 days pre-election) stored in each champion backtest run config",
+     "decision": "Time-decayed average in polled tier", "source": "Project research mandate"},
+    {"id": "H-003", "claim": "Absence of polls is not evidence a race is tied.",
+     "chamber": "both", "metric": "two-tier model routing",
+     "mechanism": "Unpolled races fall back to fundamentals, with wider uncertainty",
+     "status": "Production",
+     "validation": "Separate fundamentals fit + unpolled subgroup metrics in run config",
+     "decision": "Dedicated fundamentals tier", "source": "Project research mandate"},
+    {"id": "H-004", "claim": "The president's party is penalized in midterms.",
+     "chamber": "both", "metric": "midterm_environment",
+     "mechanism": "Midterm referendum dynamics against the White House",
+     "status": "Production",
+     "validation": "Compare champion vs baseline-environment-only; midterm-cycle subgroup metrics",
+     "decision": "Environment + midterm interaction features", "source": "Project research mandate"},
+    {"id": "H-005", "claim": "Recently redrawn districts require greater uncertainty.",
+     "chamber": "house", "metric": "has_prior / lookback restriction",
+     "mechanism": "New boundaries break seat-history comparability",
+     "status": "Production",
+     "validation": "House prior lookback restricted to post-redistricting cycles; +5pt sigma when no prior",
+     "decision": "Structural: lookback limits + variance inflation", "source": "Project research mandate"},
+    {"id": "S-001", "claim": "Senate races are more candidate-sensitive than House races.",
+     "chamber": "senate", "metric": "chamber-specific residual sigma",
+     "mechanism": "Statewide personal brands decouple from partisanship",
+     "status": "Validated",
+     "validation": "Separate Senate fit; residual sigmas stored per chamber in model_versions.coefficients",
+     "decision": "Chamber-specific models (mandate requirement 6)", "source": "Project research mandate"},
+    {"id": "F-001", "claim": "Challenger fundraising may be more informative than total spending.",
+     "chamber": "both", "metric": "FEC receipts/cash-on-hand",
+     "mechanism": "Money proxies candidate quality and enthusiasm",
+     "status": "Collecting data",
+     "validation": "FEC adapter ingests live totals; NO historical vintage series yet, so no leakage-safe backtest is possible",
+     "decision": "Displayed per race; excluded from the model until vintage-tested",
+     "source": "Project research mandate"},
+    {"id": "A-001", "claim": "Alaska/Maine ranked-choice races need transfer-round simulation.",
+     "chamber": "senate", "metric": "election_system flag",
+     "mechanism": "Multi-candidate elimination changes win conditions",
+     "status": "Proposed",
+     "validation": "Not yet modeled; races are flagged ranked_choice and carry standard uncertainty",
+     "decision": "Open challenger-model slot; margins for AK/ME treated as two-party approximations",
+     "source": "Project research mandate"},
+    {"id": "P-001", "claim": "Polling errors are correlated within a cycle, not independent.",
+     "chamber": "both", "metric": "shared national shock (3.5pt sigma)",
+     "mechanism": "Common-mode polling and environment misses",
+     "status": "Production",
+     "validation": "Margin-space control simulation decomposes national vs idiosyncratic error",
+     "decision": "Correlated simulation structure", "source": "Project research mandate"},
+    {"id": "P-002", "claim": "REPORTED FAILURE: at election-eve cutoff the polls-only baseline "
+                             "marginally beats the blended model on polled races.",
+     "chamber": "both", "metric": "baseline-polls-only vs champion",
+     "mechanism": "Election-eve polling already impounds most fundamentals information",
+     "status": "Experimental",
+     "validation": "See /api/models/comparison (identical walk-forward protocol); the blend "
+                   "remains ahead of every fundamentals baseline and is required for the "
+                   "~78% of 2026 races with no polling",
+     "decision": "Champion retained for full-universe coverage; a higher-poll-weight "
+                 "challenger is the top open experiment. Not silently tuned away, per "
+                 "the no-post-hoc-fitting rule",
+     "source": "This project's own backtests"},
+]
+
 
 def build_race_universe() -> list[dict]:
     """Upsert the 2026 race table from ingested incumbency data."""
@@ -136,6 +210,7 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
         "description": "Chamber-specific ridge regression on vintage-safe "
                        "fundamentals + time-decayed polling averages",
         "coefficients": model.to_json()})
+    store.seed_research_claims(RESEARCH_CLAIMS)
     backtests = run_backtests(MODEL_VERSION) if with_backtests else []
     store.set_meta("last_forecast_as_of", as_of)
     store.set_meta("last_data_version", version)

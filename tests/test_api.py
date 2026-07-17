@@ -76,10 +76,17 @@ def test_race_detail_history_components(client):
 def test_backtests_are_real_runs(client):
     payload = client.get("/api/backtests").json()
     assert payload["runs"], "pipeline must persist backtest runs"
-    run = payload["runs"][0]
-    assert run["brier"] is not None and run["n_races"] > 0
-    detail = client.get(f"/api/backtests/{run['id']}").json()
+    champion = next(r for r in payload["runs"]
+                    if not str(r["model_version"]).startswith("baseline"))
+    assert champion["brier"] is not None and champion["n_races"] > 0
+    assert "subgroups" in champion["config"]
+    detail = client.get(f"/api/backtests/{champion['id']}").json()
     assert detail["by_cycle"]
+    baselines = [r for r in payload["runs"]
+                 if str(r["model_version"]).startswith("baseline")]
+    assert baselines, "baseline comparisons must be stored"
+    comparison = client.get("/api/models/comparison").json()
+    assert "baseline-prior-result" in comparison["chambers"]["house"]
 
 
 def test_data_health_reports_demo_mode(client):

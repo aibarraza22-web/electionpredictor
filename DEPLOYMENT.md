@@ -14,11 +14,18 @@
 
 ## Vercel setup
 
-1. Import the repo in Vercel; the committed `pyproject.toml` (with its
-   `[project]` table) and `uv.lock` drive dependency installation. No custom
-   build command needed.
+1. Import the repo in Vercel with these project settings (Settings →
+   Build & Development):
+   * **Framework Preset: Other** — the committed `vercel.json` rewrites all
+     traffic to the `api/index.py` serverless function, which
+     `@vercel/python` builds from the root `requirements.txt`. This path
+     does not depend on the beta FastAPI preset. (The repo also carries
+     valid `[project]` metadata and `uv.lock`, so the FastAPI preset works
+     too if selected.)
+   * Build command / output directory: leave empty.
 2. Set environment variables: `DATABASE_URL` (required for durability),
-   `ADMIN_TOKEN` (optional; admin API stays disabled without it).
+   `ADMIN_TOKEN` (optional; admin API stays disabled without it). Redeploy
+   after changing env vars — they apply only to new deployments.
 3. In GitHub, add repository secret `DATABASE_URL` (same value) plus
    optionally `FEC_API_KEY`, and repository variable `POLLS_FEED_URL`; then
    run the "Scheduled forecast pipeline" workflow once manually.

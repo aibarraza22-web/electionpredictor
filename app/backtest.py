@@ -10,13 +10,28 @@ from __future__ import annotations
 
 import json
 from math import log, sqrt
+from statistics import pstdev
 from uuid import uuid4
 
 from . import store
-from .features import FeatureRow, PollLookup, ResultLookup, historical_rows
-from .model import MarginModel
+from .domain import normal_cdf
+from .features import FEATURE_NAMES, FeatureRow, PollLookup, ResultLookup, historical_rows
+from .model import MIN_SIGMA, MarginModel, ridge_fit
 
 MIN_TRAINING_CYCLES = 3
+
+# Baseline models: the SAME walk-forward protocol restricted to a feature
+# subset (indices into FEATURE_NAMES). The production model must beat these
+# on held-out Brier/log loss to justify its complexity; results are stored,
+# never asserted. "polled_only" restricts scoring to races with polls so the
+# comparison is on equal information.
+BASELINES: dict[str, dict] = {
+    "baseline-prior-result": {"features": [0, 1, 2], "polled_only": False},
+    "baseline-incumbency-only": {"features": [0, 3], "polled_only": False},
+    "baseline-environment-only": {"features": [0, 4, 5], "polled_only": False},
+    "baseline-uniform-swing": {"features": [0, 1, 2, 4, 5], "polled_only": False},
+    "baseline-polls-only": {"features": [0, 6, 7], "polled_only": True},
+}
 
 
 def metrics(scored: list[dict]) -> dict:
@@ -86,13 +101,96 @@ def walk_forward(rows: list[FeatureRow], chamber: str,
     return scored, evaluated
 
 
+def walk_forward_baseline(rows: list[FeatureRow], chamber: str, feature_idx: list[int],
+                          polled_only: bool = False,
+                          min_training_cycles: int = MIN_TRAINING_CYCLES) -> list[dict]:
+    """The identical expanding-window protocol on a restricted feature set."""
+    rows = [r for r in rows if r.chamber == chamber and r.actual_margin is not None]
+    if polled_only:
+        rows = [r for r in rows if r.poll_count > 0]
+    cycles = sorted({r.cycle for r in rows})
+    scored: list[dict] = []
+    for test_cycle in cycles:
+        training = [r for r in rows if r.cycle < test_cycle]
+        if len({r.cycle for r in training}) < min_training_cycles:
+            continue
+        xs = [[r.x[i] for i in feature_idx] for r in training]
+        ys = [r.actual_margin for r in training]
+        weights = ridge_fit(xs, ys)
+        residuals = [y - sum(w * v for w, v in zip(weights, x)) for x, y in zip(xs, ys)]
+        sigma = max(MIN_SIGMA, pstdev(residuals)) if len(residuals) > 1 else MIN_SIGMA
+        for row in (r for r in rows if r.cycle == test_cycle):
+            mean = sum(w * row.x[i] for w, i in zip(weights, feature_idx))
+            probability = min(.995, max(.005, normal_cdf(mean / sigma)))
+            scored.append({
+                "cycle": test_cycle, "seat_key": row.seat_key,
+                "probability": probability, "predicted_margin": mean,
+                "actual_margin": row.actual_margin,
+                "dem_won": 1 if row.actual_margin > 0 else 0,
+                "low80": mean - 1.282 * sigma, "high80": mean + 1.282 * sigma,
+                "low95": mean - 1.960 * sigma, "high95": mean + 1.960 * sigma,
+                "polled": row.poll_count > 0,
+            })
+    return scored
+
+
+def subgroup_metrics(scored: list[dict], rows_by_key: dict[tuple, FeatureRow]) -> dict:
+    """Performance sliced the way the research mandate asks for."""
+    def sel(predicate):
+        return metrics([s for s in scored if predicate(s)])
+
+    def row_of(s):
+        return rows_by_key.get((s["cycle"], s["seat_key"]))
+
+    return {
+        "polled": sel(lambda s: s["polled"]),
+        "unpolled": sel(lambda s: not s["polled"]),
+        "midterm_cycles": sel(lambda s: s["cycle"] % 4 == 2),
+        "presidential_cycles": sel(lambda s: s["cycle"] % 4 == 0),
+        "competitive_actual_lt10": sel(lambda s: abs(s["actual_margin"]) < 10),
+        "safe_actual_ge10": sel(lambda s: abs(s["actual_margin"]) >= 10),
+        "dem_held_seats": sel(lambda s: (r := row_of(s)) is not None and r.x[3] > 0),
+        "rep_held_seats": sel(lambda s: (r := row_of(s)) is not None and r.x[3] < 0),
+    }
+
+
+def horizon_metrics(results: ResultLookup, poll_lookup: PollLookup,
+                    chamber: str) -> dict:
+    """Production-model accuracy at earlier poll cutoffs.
+
+    The evaluation population is held FIXED — races that had polls by
+    election eve — and the model is re-scored on that same set at each
+    earlier cutoff (where a race may not yet have polls and falls back to
+    the fundamentals tier, exactly as it would have in real time). A
+    shifting population would otherwise shrink to tiny, unrepresentative
+    samples at long horizons.
+    """
+    eve_rows = historical_rows(results, poll_lookup, chamber)
+    eligible = {(r.cycle, r.seat_key) for r in eve_rows if r.poll_count > 0}
+    out = {}
+    for days_before, cutoffs in (
+            (0, None),
+            (30, {c: f"{c}-10-09" for c in range(1998, 2026, 2)}),
+            (90, {c: f"{c}-08-10" for c in range(1998, 2026, 2)})):
+        rows = eve_rows if cutoffs is None else historical_rows(
+            results, poll_lookup, chamber, election_dates=cutoffs)
+        scored, _ = walk_forward(rows, chamber)
+        subset = [s for s in scored if (s["cycle"], s["seat_key"]) in eligible]
+        out[str(days_before)] = metrics(subset)
+    out["population"] = "races polled by election eve; earlier cutoffs may route them to the fundamentals tier"
+    return out
+
+
 def run_backtests(model_version: str) -> list[dict]:
-    """Run and persist expanding-window backtests for both chambers."""
+    """Persist expanding-window backtests: production model with subgroup and
+    horizon breakdowns, plus every baseline under the identical protocol."""
     results = ResultLookup(store.all_results())
     poll_lookup = PollLookup(store.all_polls())
     runs = []
+    comparison: dict[str, dict[str, dict]] = {}
     for chamber in ("house", "senate"):
         rows = historical_rows(results, poll_lookup, chamber)
+        rows_by_key = {(r.cycle, r.seat_key): r for r in rows}
         scored, evaluated = walk_forward(rows, chamber)
         if not scored:
             continue
@@ -114,9 +212,55 @@ def run_backtests(model_version: str) -> list[dict]:
             "config": json.dumps({
                 "design": "expanding-window prequential",
                 "poll_cutoff": "election day", "min_training_cycles": MIN_TRAINING_CYCLES,
+                "subgroups": subgroup_metrics(scored, rows_by_key),
+                "horizons_days_before_election": horizon_metrics(results, poll_lookup, chamber),
                 "note": "coverage reflects ingested sources; polled-race-only cycles "
                         "over-represent competitive districts"}),
         }
         store.save_backtest_run(run)
         runs.append(run)
+        comparison.setdefault(chamber, {})[model_version] = {
+            "brier": summary["brier"], "log_loss": summary["log_loss"],
+            "winner_accuracy": summary["winner_accuracy"],
+            "margin_mae": summary["margin_mae"], "n_races": summary["n_races"]}
+
+        for name, spec in BASELINES.items():
+            baseline_scored = walk_forward_baseline(
+                rows, chamber, spec["features"], spec["polled_only"])
+            if not baseline_scored:
+                continue
+            baseline_summary = metrics(baseline_scored)
+            baseline_run = {
+                "id": f"bt-{chamber}-{uuid4().hex[:10]}",
+                "run_at": store.now(), "model_version": name,
+                "chamber": chamber,
+                "cycles": json.dumps(sorted({s["cycle"] for s in baseline_scored})),
+                "n_races": baseline_summary["n_races"],
+                "brier": baseline_summary["brier"],
+                "log_loss": baseline_summary["log_loss"],
+                "winner_accuracy": baseline_summary["winner_accuracy"],
+                "margin_mae": baseline_summary["margin_mae"],
+                "margin_rmse": baseline_summary["margin_rmse"],
+                "coverage80": baseline_summary["coverage80"],
+                "coverage95": baseline_summary["coverage95"],
+                "calibration": json.dumps(baseline_summary["calibration"]),
+                "by_cycle": None,
+                "config": json.dumps({
+                    "design": "expanding-window prequential (baseline)",
+                    "features": [FEATURE_NAMES[i] for i in spec["features"]],
+                    "polled_only": spec["polled_only"]}),
+            }
+            store.save_backtest_run(baseline_run)
+            comparison[chamber][name] = {
+                "brier": baseline_summary["brier"],
+                "log_loss": baseline_summary["log_loss"],
+                "winner_accuracy": baseline_summary["winner_accuracy"],
+                "margin_mae": baseline_summary["margin_mae"],
+                "n_races": baseline_summary["n_races"]}
+    if comparison:
+        store.set_meta("model_comparison", json.dumps(
+            {"run_at": store.now(), "champion": model_version,
+             "chambers": comparison,
+             "note": "identical expanding-window protocol; baseline-polls-only "
+                     "is scored on polled races only"}))
     return runs

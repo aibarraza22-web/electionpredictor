@@ -9,6 +9,16 @@ as-of date enters features (`app/backtest.py::walk_forward`).
 Reported per run and per cycle: Brier score, log loss, winner accuracy,
 margin MAE/RMSE, 80/95% interval coverage, and 10-bin calibration.
 
+Every pipeline run also evaluates **baseline models under the identical
+protocol** — prior-result-only, incumbency-only, environment-only, uniform
+swing, and polls-only — and stores a champion-vs-baseline table at
+`/api/models/comparison`. When a baseline beats the champion on some slice,
+that result is recorded in the research registry as a reported failure, not
+tuned away. Each champion run's config also stores **subgroup metrics**
+(polled/unpolled, midterm vs presidential cycles, competitive vs safe,
+Dem-held vs Rep-held) and **forecast-horizon metrics** (poll cutoffs 0/30/90
+days before the election).
+
 Run with `python scripts/backtest.py` (also re-run automatically by every
 forecast pipeline execution). Results are persisted to `backtest_runs` and
 served at `/api/backtests` — **the application never reports performance

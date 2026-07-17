@@ -19,6 +19,8 @@ import io
 import json
 from collections import defaultdict
 
+import httpx
+
 from .. import store
 from .base import STATES, fetch, house_seat_key, senate_seat_key, sha256, two_party_margin
 
@@ -43,8 +45,20 @@ def _dataset_file_urls(doi: str) -> list[tuple[str, str]]:
         df = f["dataFile"]
         label = (df.get("originalFileName") or df.get("filename") or "").lower()
         if label.endswith((".csv", ".tab")):
-            urls.append((label, f"{DATAVERSE}/api/access/datafile/{df['id']}?format=original"))
+            urls.append((label, df["id"]))
     return urls
+
+
+def _fetch_datafile(file_id: int) -> bytes:
+    """Dataverse rejects ``format=original`` for files it has no distinct
+    original upload for (HTTP 400); fall back to the archival/ingested copy,
+    which is a normalized, still-authoritative CSV/TSV."""
+    try:
+        return fetch(f"{DATAVERSE}/api/access/datafile/{file_id}?format=original")
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 400:
+            raise
+        return fetch(f"{DATAVERSE}/api/access/datafile/{file_id}")
 
 
 def parse(payload: bytes, chamber: str) -> list[dict]:
@@ -97,17 +111,24 @@ def parse(payload: bytes, chamber: str) -> list[dict]:
 
 
 def ingest(chambers: tuple[str, ...] = ("house", "senate")) -> dict:
-    summary: dict = {"source": SOURCE, "results": 0, "files": []}
+    summary: dict = {"source": SOURCE, "results": 0, "files": [], "failed_files": []}
     for chamber in chambers:
-        for label, url in _dataset_file_urls(DATASETS[chamber]):
-            payload = fetch(url)
+        for label, file_id in _dataset_file_urls(DATASETS[chamber]):
+            try:
+                payload = _fetch_datafile(file_id)
+            except httpx.HTTPStatusError as exc:
+                # One unreadable file (e.g. a codebook or an unusual format)
+                # must not block every other file in the dataset.
+                summary["failed_files"].append(f"{chamber}: {label}: {exc}")
+                continue
             rows = parse(payload, chamber)
             if not rows:
                 continue
             inserted = store.insert_rows("election_results", rows)
             store.record_source(
-                SOURCE, url, LICENSE, available_at=store.now(),
-                sha256=sha256(payload), record_count=inserted,
+                SOURCE, f"{DATAVERSE}/api/access/datafile/{file_id}", LICENSE,
+                available_at=store.now(), sha256=sha256(payload),
+                record_count=inserted,
                 note=f"{chamber}: {label}, {len(rows)} seat-cycle margins")
             summary["results"] += inserted
             summary["files"].append(label)

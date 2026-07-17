@@ -10,3 +10,24 @@ jobs:
       - run: pip install -r requirements.txt
       # Run pytest through the interpreter used for dependency installation.
       - run: python -m pytest -q
+      # Smoke-test the full pipeline with clearly-labelled synthetic data.
+      - run: python scripts/seed_demo.py
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: {POSTGRES_PASSWORD: ci, POSTGRES_DB: forecast}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:ci@localhost:5432/forecast
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -r requirements.txt
+      # Exercise the storage layer and pipeline against real PostgreSQL.
+      - run: python scripts/seed_demo.py

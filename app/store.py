@@ -58,16 +58,23 @@ def sources_summary() -> list[dict]:
 # --- bulk ingest helpers ----------------------------------------------
 
 def insert_rows(table_name: str, rows: Sequence[dict]) -> int:
-    """Insert rows, ignoring duplicates (idempotent re-ingestion)."""
+    """Insert rows, ignoring duplicates (idempotent re-ingestion).
+
+    Counts via RETURNING rather than cursor.rowcount: some drivers report -1
+    (unknown) for batched ON CONFLICT DO NOTHING inserts, which would
+    otherwise make successful ingestion look like it inserted nothing.
+    """
     if not rows:
         return 0
     table = db.metadata.tables[table_name]
+    pk_columns = list(table.primary_key.columns)
     inserted = 0
     with db.get_engine().begin() as c:
         for chunk_start in range(0, len(rows), 500):
             chunk = rows[chunk_start:chunk_start + 500]
-            result = c.execute(db.insert_ignore(table), chunk)
-            inserted += result.rowcount if result.rowcount and result.rowcount > 0 else 0
+            statement = db.insert_ignore(table).returning(*pk_columns)
+            result = c.execute(statement, chunk)
+            inserted += len(result.fetchall())
     return inserted
 
 

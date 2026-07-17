@@ -4,7 +4,14 @@ from pathlib import Path
 from datetime import datetime, timezone
 from .domain import RaceFeatures, EnsembleModel
 
-DB_PATH=Path(__file__).parents[1] / "data" / "forecast_lab.sqlite"
+import os
+
+DB_PATH = (
+    Path("/tmp/forecast_lab.sqlite")
+    if os.getenv("VERCEL")
+    else Path(__file__).parents[1] / "data" / "forecast_lab.sqlite"
+)
+
 STATES=['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','IA','ID','IL','IN','KS','KY','LA','MA','MD','ME','MI','MN','MO','MS','MT','NC','NE','NH','NJ','NM','NV','NY','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VA','VT','WA','WI','WV','WY']
 SENATE_2026=['AL','AK','AR','CO','DE','GA','ID','IL','IA','KS','KY','LA','ME','MA','MI','MN','MS','MT','NE','NH','NJ','NM','NC','OK','OR','RI','SC','SD','TN','TX','VA','WV','WY']
 

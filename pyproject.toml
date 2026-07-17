@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Keep local, CI, and container collection deterministic when the package is not installed.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra"

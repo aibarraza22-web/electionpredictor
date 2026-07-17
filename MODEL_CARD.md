@@ -1,0 +1,3 @@
+# Model card
+
+**Use:** research, engineering demonstration, and transparent forecast workflow development. **Not for:** live campaign decisions, certainty claims, or presenting demo data as polling. Training period/performance: no real results in demo. Features: synthetic partisan baseline, national environment, incumbency/open-seat, candidate, finance, expert and optional polling signals. Family: chamber-specific linear ensemble. Validation: leakage-safe expanding-window framework. Known weakness: no authoritative historical/live data is shipped. Model version: 2026.1; update only after completed outcomes or controlled validated methodology changes.

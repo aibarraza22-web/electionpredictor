@@ -1,12 +1,33 @@
-name: Scheduled demo refresh
+name: Scheduled forecast pipeline
+# Ingests primary sources and rebuilds the forecast against the production
+# database. Requires the DATABASE_URL secret (managed PostgreSQL, e.g. Neon
+# or Vercel Postgres). Optional: FEC_API_KEY secret for campaign finance,
+# POLLS_FEED_URL repository variable for a live 2026 polling feed
+# (any CSV in the FiveThirtyEight raw-polls schema).
 on:
-  schedule: [{cron: '17 */6 * * *'}]
+  schedule: [{cron: '17 9 * * *'}]
   workflow_dispatch:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      FEC_API_KEY: ${{ secrets.FEC_API_KEY }}
+      POLLS_FEED_URL: ${{ vars.POLLS_FEED_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: pip install -r requirements.txt && python scripts/seed_demo.py
+      - run: pip install -r requirements.txt
+      - name: Require production database
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::warning::DATABASE_URL secret not configured; skipping live refresh."
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          fi
+      - name: Ingest primary sources
+        if: env.SKIP != '1'
+        run: python scripts/ingest.py --sources fte_polls,legislators,medsl,fec,polls_feed
+      - name: Build forecast, control simulation, and validation backtests
+        if: env.SKIP != '1'
+        run: python scripts/forecast.py

@@ -1,13 +1,25 @@
 [project]
 name = "electionpredictor"
-version = "0.1.0"
-description = "Demo-mode congressional election forecasting application"
+version = "2026.2.0"
+description = "Congressional election forecasting platform with real data ingestion, PostgreSQL persistence, and validated backtests"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi==0.115.6",
     "uvicorn[standard]==0.34.0",
     "pydantic==2.10.5",
+    "sqlalchemy==2.0.37",
+    "psycopg[binary]==3.2.4",
+    "httpx==0.28.1",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest==8.3.4",
+]
+
+[tool.uv]
+# Application, not an installable library: no build backend required.
+package = false
 
 [tool.pytest.ini_options]
 # Keep local, CI, and container collection deterministic when the package is not installed.

@@ -1,5 +1,32 @@
 # Architecture
 
-FastAPI serves API and a small dependency-free dashboard. SQLite is the no-credential demo store; deploy PostgreSQL by replacing the store adapter. `app/domain.py` contains chamber-specific forecast logic, `simulation.py` contains seeded correlated simulations, `backtest.py` contains expanding-window mechanics, and `store.py` owns schemas/seeding/snapshot writes. Raw sources must be append-only and timestamped. The API is typed by FastAPI/OpenAPI.
+```
+GitHub Actions (daily)                     Serving (Vercel / uvicorn / Docker)
+────────────────────────                   ────────────────────────────────────
+scripts/ingest.py                          app/main.py   FastAPI + dashboard
+  app/ingest/*  ── raw_sources,              reads snapshots, races, polls,
+                   election_results,         backtests, provenance
+                   polls, incumbents,      app/index.py  Vercel entrypoint
+                   finance
+scripts/forecast.py
+  app/features.py  vintage-safe rows   ──►  PostgreSQL (DATABASE_URL)
+  app/model.py     ridge fits               SQLite fallback for local dev
+  app/backtest.py  walk-forward runs
+  app/forecast.py  race universe,
+                   snapshots, control sims
+```
 
-The production database migration must include: elections, election_cycles, races, states, districts, district_boundaries, candidates, candidate_experience, candidate_events, election_results, presidential_results, polls, pollsters, pollster_ratings, fundraising_reports, expenditures, outside_spending, endorsements, expert_ratings, prediction_markets, economic_indicators, approval_polls, generic_ballot_polls, demographics, turnout, registration, ballot_requests, special_elections, redistricting_events, election_rules, research_claims, research_sources, research_hypotheses, metric_registry, raw_sources, data_versions, feature_snapshots, model_versions, forecasts, forecast_components, forecast_snapshots, simulations, backtest_runs, backtest_predictions, validation_metrics, model_comparisons, manual_overrides, and audit_logs.
+* `app/db.py` — SQLAlchemy Core schema + engine (PostgreSQL or SQLite from
+  the same code); `app/store.py` — repository functions; raw sources are
+  append-only and hashed.
+* `app/features.py` — as-of feature construction with source precedence.
+* `app/model.py` — pure-Python ridge fits (no numeric dependencies), stored
+  as versioned coefficient data.
+* `app/backtest.py` — expanding-window validation persisted to
+  `backtest_runs`.
+* `app/forecast.py` — real 2026 race universe (2020-census apportionment,
+  Senate class 2 + ingested specials), immutable snapshots, stored control
+  simulations.
+* `app/simulation.py` — seeded correlated margin-space simulation.
+* The API is typed by FastAPI/OpenAPI; heavy computation happens in the
+  pipeline, requests only read (scenarios run a small labelled simulation).

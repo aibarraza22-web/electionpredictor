@@ -4,13 +4,26 @@
 features, predicting the Democratic two-party margin (`app/model.py`,
 coefficients stored as versioned data in `model_versions`).
 
-Two fits per chamber:
+Three fits per chamber, routed by what data actually exists for a race so the
+model never extrapolates through a feature absent at prediction time:
 
-* **full** — fundamentals + time-decayed polling average (21-day half-life,
-  partisan polls down-weighted); applied to races with polls.
-* **fundamentals** — poll columns excluded, fit on all historical races;
-  applied to unpolled races so their weights are estimated honestly rather
-  than extrapolated from the polled-race intercept.
+* **full** — fundamentals + time-decayed race-polling average (21-day
+  half-life, partisan polls down-weighted); applied to races with polls.
+* **fundamentals** — race-poll columns excluded, generic-ballot columns kept;
+  applied to unpolled races when national generic-ballot polling exists for
+  the cycle *and* the champion spec uses it (see below).
+* **core** — seat history, seat-holder party, and president-party environment
+  only; applied when neither race polls nor usable national polling exist.
+
+**Champion / challenger discipline:** every pipeline run re-evaluates the
+champion spec against challenger specs (currently per-state partial-pooled
+residual offsets, and a generic-ballot variant) and five naive baselines
+under the identical expanding-window protocol. The raw generic-ballot
+average is *excluded* from the champion because it degraded held-out
+accuracy in both chambers when first tested (research claim N-001); it is
+automatically re-tested every run and will be promoted only on evidence.
+Per-race predictions from every model are stored, and
+`/api/races/{id}/models` exposes where they disagree.
 
 Features (`app/features.py`): seat prior margin (most recent same-seat
 result, clipped), prior availability flag, seat-holder party, president-party

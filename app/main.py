@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from . import db, store
 from .dashboard import DASHBOARD_HTML
+from .forecast import MODEL_VERSION
 from .simulation import simulate_control
 
 
@@ -95,7 +96,7 @@ def forecast_control():
 def forecast_chamber(chamber: str):
     if chamber not in ("house", "senate"):
         raise HTTPException(404)
-    snapshots = store.latest_forecasts(chamber)
+    snapshots = store.latest_forecasts(chamber, model_version=MODEL_VERSION)
     if not snapshots:
         raise HTTPException(404, "No forecasts stored; run the forecast pipeline.")
     return {"mode": current_mode(),
@@ -115,21 +116,36 @@ def get_race(race_id: str):
     race = store.get_race(race_id)
     if not race:
         raise HTTPException(404)
-    return {**race, "forecast": store.latest_forecast(race_id), "mode": current_mode()}
+    return {**race, "forecast": store.latest_forecast(race_id, MODEL_VERSION),
+            "mode": current_mode()}
 
 
 @app.get("/api/races/{race_id}/history")
 def race_history(race_id: str):
-    return store.forecast_history(race_id)
+    rows = store.forecast_history(race_id)
+    return [r for r in rows
+            if not r["model_version"].startswith(("baseline", "challenger"))]
 
 
 @app.get("/api/races/{race_id}/components")
 def race_components(race_id: str):
-    snapshot = store.latest_forecast(race_id)
+    snapshot = store.latest_forecast(race_id, MODEL_VERSION)
     if not snapshot:
         raise HTTPException(404)
     return {"race_id": race_id, "components": json.loads(snapshot["components"]),
             "as_of": snapshot["as_of"]}
+
+
+@app.get("/api/races/{race_id}/models")
+def race_models(race_id: str):
+    """Every model's latest prediction for this race — champion, challengers,
+    and baselines — so disagreement between methods is inspectable per race."""
+    rows = store.models_for_race(race_id)
+    if not rows:
+        raise HTTPException(404)
+    for row in rows:
+        row.pop("components", None)
+    return {"race_id": race_id, "champion": MODEL_VERSION, "models": rows}
 
 
 @app.get("/api/races/{race_id}/polls")
@@ -242,7 +258,7 @@ def scenario(s: Scenario):
     out = {"label": "Scenario — not the official forecast",
            "national_environment": s.national_environment, "mode": current_mode()}
     for chamber, base_key in (("house", None), ("senate", "senate_dem_seats_not_up")):
-        snapshots = store.latest_forecasts(chamber)
+        snapshots = store.latest_forecasts(chamber, model_version=MODEL_VERSION)
         if not snapshots:
             raise HTTPException(404, "No forecasts stored; run the forecast pipeline.")
         shifted = [{**f, "margin": f["margin"] + s.national_environment} for f in snapshots]

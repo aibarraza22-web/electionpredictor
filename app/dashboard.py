@@ -114,6 +114,7 @@ footer{margin-top:2.2rem;color:var(--ink3);font-size:.78rem}
 
 <section id="bgSec" style="display:none">
   <h2>Battlegrounds <small>— closest races by win probability among races with seat-level data (grade C+), derived from the model (not hand-picked)</small></h2>
+  <p id="triage" class="small" style="color:var(--ink2);margin:.2rem 0 .6rem"></p>
   <div id="battle" class="chips"></div>
 </section>
 
@@ -239,7 +240,8 @@ async function openDetail(id){
       <div class="tile"><div class="lbl">Projected margin</div><div class="big mono" style="font-size:1.4rem">${sgn(f.margin)}</div><div class="det">80%: ${sgn(f.low80)} … ${sgn(f.high80)}<br>95%: ${sgn(f.low95)} … ${sgn(f.high95)}</div></div>
       <div class="tile"><div class="lbl">Rating / data grade</div><div style="padding-top:.3rem"><span class="rt ${RT[f.rating]||"TU"}">${esc(f.rating)}</span> <span class="status">grade ${esc(f.quality)}</span></div></div>
     </div>
-    <div id="dComp"></div><div id="dPolls" class="small" style="margin-top:.7rem">Loading polls…</div><div id="dHist" class="small muted" style="margin-top:.5rem"></div>`;
+    <div id="dComp"></div><div id="dModels" style="margin-top:.8rem"></div>
+    <div id="dPolls" class="small" style="margin-top:.7rem">Loading polls…</div><div id="dHist" class="small muted" style="margin-top:.5rem"></div>`;
   const comp=JSON.parse(f.components||"{}"), tier=comp._model; delete comp._model;
   const entries=Object.entries(comp); const mx=Math.max(...entries.map(([,v])=>Math.abs(v)),1);
   $("#dComp").innerHTML=`<h2 style="margin-top:.4rem">Why this forecast <small>— additive margin components (points), ${tier==="full"?"polls + fundamentals tier":"fundamentals tier (no polls yet for this race)"}</small></h2>`+
@@ -249,6 +251,17 @@ async function openDetail(id){
       return `<div class="comp"><span>${esc(k)}</span><span class="bar"><i style="left:${left}%;width:${w}%;background:${v>=0?"var(--dem)":"var(--rep)"}"></i><b style="position:absolute;left:50%;top:0;bottom:0;width:1.5px;background:var(--ink3)"></b></span><span class="mono" style="text-align:right">${v>=0?"D+":"R+"}${Math.abs(v).toFixed(2)}</span></div>`;
     }).join("");
   d.scrollIntoView({behavior:"smooth",block:"end"});
+  try{
+    const mm=await j(`/api/races/${id}/models`);
+    if(mm.models.length>1){
+      $("#dModels").innerHTML=`<h2 style="margin:0 0 .4rem">Model comparison <small>— what each method says about this race; the champion drives the official forecast</small></h2>
+      <div class="tablewrap"><table><thead><tr><th>Model</th><th>Dem win</th><th>Margin</th><th>80% interval</th><th>Rating</th></tr></thead><tbody>`+
+      mm.models.map(x=>`<tr style="cursor:default"><td>${x.model_version===mm.champion?`<b>${esc(x.model_version)} (champion)</b>`:esc(x.model_version)}</td>
+        <td class="mono">${pct(x.dem_probability)}</td><td class="mono">${sgn(x.margin)}</td>
+        <td class="mono muted">${sgn(x.low80)} … ${sgn(x.high80)}</td>
+        <td><span class="rt ${RT[x.rating]||"TU"}">${esc(x.rating)}</span></td></tr>`).join("")+`</tbody></table></div>`;
+    }
+  }catch(e){}
   try{
     const [polls,hist]=await Promise.all([j(`/api/races/${id}/polls`), j(`/api/races/${id}/history`)]);
     $("#dPolls").innerHTML= polls.polls.length
@@ -288,6 +301,9 @@ async function main(){
   const battle=RACES.map(r=>({r,f:FC[r.id]})).filter(x=>x.f&&x.f.quality<"D")
     .sort((a,b)=>Math.abs(a.f.dem_probability-.5)-Math.abs(b.f.dem_probability-.5)).slice(0,14);
   $("#bgSec").style.display="block";
+  const all=Object.values(FC);
+  const competitive=all.filter(f=>["Toss-up","Lean Democratic","Lean Republican"].includes(f.rating)).length;
+  $("#triage").innerHTML=`<b>${competitive}</b> of ${all.length} races are competitive (Lean or Toss-up) — that is where research, polling, and candidate attention pay off. The other <b>${all.length-competitive}</b> are rated Safe/Likely by the model and need only monitoring.`;
   $("#battle").innerHTML=battle.map(({r,f})=>`<span class="chip" data-id="${r.id}">${esc(r.name||r.id)} <span class="p ${f.dem_probability>=.5?"dem":"rep"}">${pct(f.dem_probability)}</span></span>`).join("");
   $("#battle").addEventListener("click",e=>{const c=e.target.closest(".chip"); if(c) openDetail(c.dataset.id);});
 

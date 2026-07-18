@@ -27,7 +27,7 @@ jobs:
           fi
       - name: Ingest primary sources
         if: env.SKIP != '1'
-        run: python scripts/ingest.py --sources fte_polls,legislators,medsl,fec,polls_feed
+        run: python scripts/ingest.py --sources fte_polls,legislators,medsl,fec,votehub,polls_feed
       - name: Build forecast, control simulation, and validation backtests
         if: env.SKIP != '1'
         run: python scripts/forecast.py

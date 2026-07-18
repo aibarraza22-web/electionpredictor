@@ -41,6 +41,9 @@ def _orient(row: dict) -> tuple[float, float, float, float] | None:
 def _seat_key(row: dict, extra_races: dict) -> tuple[str, str, str | None] | None:
     """Return (seat_key, chamber, district) for a raw poll row."""
     kind, location = row["type_simple"], row["location"]
+    if kind == "House-G-US":
+        # National generic congressional ballot: a shared environment input.
+        return "us-generic", "national", None
     if kind == "Sen-G":
         if location not in STATES:
             return None

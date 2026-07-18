@@ -30,7 +30,19 @@ BASELINES: dict[str, dict] = {
     "baseline-incumbency-only": {"features": [0, 3], "polled_only": False},
     "baseline-environment-only": {"features": [0, 4, 5], "polled_only": False},
     "baseline-uniform-swing": {"features": [0, 1, 2, 4, 5], "polled_only": False},
-    "baseline-polls-only": {"features": [0, 6, 7], "polled_only": True},
+    "baseline-generic-ballot": {"features": [0, 1, 2, 6, 7], "polled_only": False},
+    "baseline-polls-only": {"features": [0, 8, 9], "polled_only": True},
+}
+
+# Challenger models: full-feature variants competing with the champion under
+# the identical protocol. Promotion requires winning, and the decision is
+# recorded either way.
+CHALLENGERS: dict[str, dict] = {
+    "challenger-state-effects": {"state_effects": True},
+    # Re-tests the generic-ballot feature every run: it degraded held-out
+    # accuracy on first evaluation (claim N-001) and stays out of the
+    # champion until this challenger wins.
+    "challenger-generic-ballot": {"use_generic_ballot": True},
 }
 
 
@@ -66,7 +78,8 @@ def metrics(scored: list[dict]) -> dict:
 
 
 def walk_forward(rows: list[FeatureRow], chamber: str,
-                 min_training_cycles: int = MIN_TRAINING_CYCLES) -> tuple[list[dict], list[int]]:
+                 min_training_cycles: int = MIN_TRAINING_CYCLES,
+                 model_kwargs: dict | None = None) -> tuple[list[dict], list[int]]:
     """Frozen out-of-sample predictions for every eligible cycle."""
     rows = [r for r in rows if r.chamber == chamber and r.actual_margin is not None]
     cycles = sorted({r.cycle for r in rows})
@@ -81,7 +94,7 @@ def walk_forward(rows: list[FeatureRow], chamber: str,
         assert all(r.cycle < test_cycle for r in training), "future cycle leaked into training"
         assert all(not r.last_poll_date or r.last_poll_date <= r.detail["as_of"]
                    for r in test), "poll after as-of cutoff leaked into features"
-        model = MarginModel().fit(training)
+        model = MarginModel(**(model_kwargs or {})).fit(training)
         for row in test:
             prediction = model.predict(row)
             low80, high80 = prediction.interval(1.282)
@@ -223,6 +236,36 @@ def run_backtests(model_version: str) -> list[dict]:
             "brier": summary["brier"], "log_loss": summary["log_loss"],
             "winner_accuracy": summary["winner_accuracy"],
             "margin_mae": summary["margin_mae"], "n_races": summary["n_races"]}
+
+        for name, model_kwargs in CHALLENGERS.items():
+            challenger_scored, _ = walk_forward(rows, chamber, model_kwargs=model_kwargs)
+            if challenger_scored:
+                challenger_summary = metrics(challenger_scored)
+                store.save_backtest_run({
+                    "id": f"bt-{chamber}-{uuid4().hex[:10]}",
+                    "run_at": store.now(), "model_version": name,
+                    "chamber": chamber,
+                    "cycles": json.dumps(sorted({s['cycle'] for s in challenger_scored})),
+                    "n_races": challenger_summary["n_races"],
+                    "brier": challenger_summary["brier"],
+                    "log_loss": challenger_summary["log_loss"],
+                    "winner_accuracy": challenger_summary["winner_accuracy"],
+                    "margin_mae": challenger_summary["margin_mae"],
+                    "margin_rmse": challenger_summary["margin_rmse"],
+                    "coverage80": challenger_summary["coverage80"],
+                    "coverage95": challenger_summary["coverage95"],
+                    "calibration": json.dumps(challenger_summary["calibration"]),
+                    "by_cycle": None,
+                    "config": json.dumps({
+                        "design": "expanding-window prequential (challenger)",
+                        "model_kwargs": model_kwargs}),
+                })
+                comparison[chamber][name] = {
+                    "brier": challenger_summary["brier"],
+                    "log_loss": challenger_summary["log_loss"],
+                    "winner_accuracy": challenger_summary["winner_accuracy"],
+                    "margin_mae": challenger_summary["margin_mae"],
+                    "n_races": challenger_summary["n_races"]}
 
         for name, spec in BASELINES.items():
             baseline_scored = walk_forward_baseline(

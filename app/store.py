@@ -157,15 +157,33 @@ def insert_forecasts(rows: Sequence[dict]) -> int:
     return insert_rows("forecasts", rows)
 
 
-def latest_forecasts(chamber: str | None = None) -> list[dict]:
-    """All snapshots from the most recent as_of date."""
+def latest_forecasts(chamber: str | None = None,
+                     model_version: str | None = None) -> list[dict]:
+    """All snapshots from the most recent as_of date (optionally one model)."""
     f, r = db.forecasts, db.races
-    latest_as_of = select(func.max(f.c.as_of)).scalar_subquery()
+    latest_q = select(func.max(f.c.as_of))
+    if model_version:
+        latest_q = latest_q.where(f.c.model_version == model_version)
+    latest_as_of = latest_q.scalar_subquery()
     q = (select(f).join(r, r.c.id == f.c.race_id).where(f.c.as_of == latest_as_of))
+    if model_version:
+        q = q.where(f.c.model_version == model_version)
     if chamber:
         q = q.where(r.c.chamber == chamber)
     with db.get_engine().connect() as c:
         return [dict(x._mapping) for x in c.execute(q)]
+
+
+def models_for_race(race_id: str) -> list[dict]:
+    """Every model's latest snapshot for one race (champion + alternatives)."""
+    f = db.forecasts
+    latest_as_of = (select(func.max(f.c.as_of))
+                    .where(f.c.race_id == race_id).scalar_subquery())
+    with db.get_engine().connect() as c:
+        rows = c.execute(select(f).where(f.c.race_id == race_id,
+                                         f.c.as_of == latest_as_of)
+                         .order_by(f.c.model_version)).fetchall()
+    return [dict(r._mapping) for r in rows]
 
 
 def forecast_history(race_id: str) -> list[dict]:
@@ -175,11 +193,13 @@ def forecast_history(race_id: str) -> list[dict]:
     return [dict(r._mapping) for r in rows]
 
 
-def latest_forecast(race_id: str) -> dict | None:
+def latest_forecast(race_id: str, model_version: str | None = None) -> dict | None:
     f = db.forecasts
+    q = select(f).where(f.c.race_id == race_id)
+    if model_version:
+        q = q.where(f.c.model_version == model_version)
     with db.get_engine().connect() as c:
-        row = c.execute(select(f).where(f.c.race_id == race_id)
-                        .order_by(f.c.as_of.desc(), f.c.id.desc()).limit(1)).fetchone()
+        row = c.execute(q.order_by(f.c.as_of.desc(), f.c.id.desc()).limit(1)).fetchone()
     return dict(row._mapping) if row else None
 
 

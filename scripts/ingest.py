@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from app import store  # noqa: E402
 from app.ingest import ADAPTERS  # noqa: E402
 
-DEFAULT = "fte_polls,legislators,medsl,fec"
+DEFAULT = "fte_polls,legislators,medsl,fec,votehub,polls_feed"
 
 
 def main() -> int:

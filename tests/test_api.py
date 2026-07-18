@@ -76,17 +76,26 @@ def test_race_detail_history_components(client):
 def test_backtests_are_real_runs(client):
     payload = client.get("/api/backtests").json()
     assert payload["runs"], "pipeline must persist backtest runs"
-    run = payload["runs"][0]
-    assert run["brier"] is not None and run["n_races"] > 0
-    detail = client.get(f"/api/backtests/{run['id']}").json()
+    champion = next(r for r in payload["runs"]
+                    if not str(r["model_version"]).startswith(("baseline", "challenger")))
+    assert champion["brier"] is not None and champion["n_races"] > 0
+    assert "subgroups" in champion["config"]
+    detail = client.get(f"/api/backtests/{champion['id']}").json()
     assert detail["by_cycle"]
+    baselines = [r for r in payload["runs"]
+                 if str(r["model_version"]).startswith("baseline")]
+    assert baselines, "baseline comparisons must be stored"
+    comparison = client.get("/api/models/comparison").json()
+    assert "baseline-prior-result" in comparison["chambers"]["house"]
 
 
 def test_data_health_reports_demo_mode(client):
     health = client.get("/api/data-health").json()
     assert health["mode"] == "demo"
     assert any("demo" in w.lower() for w in health["warnings"])
-    assert health["counts"]["forecasts"] == 468
+    # champion snapshots for all 468 races, plus challenger/baseline
+    # alternates for the per-race model board
+    assert health["counts"]["forecasts"] >= 468
 
 
 def test_admin_requires_token(client, monkeypatch):

@@ -11,7 +11,7 @@ def _rows(cycles, per_cycle=40, seed=1):
         for i in range(per_cycle):
             prior = rng.uniform(-30, 30)
             x = [1.0, prior, 1.0, 1.0 if prior > 0 else -1.0, 1.0,
-                 1.0 if cycle % 4 == 2 else 0.0, 0.0, 0.0]
+                 1.0 if cycle % 4 == 2 else 0.0, 0.0, 0.0, 0.0, 0.0]
             rows.append(FeatureRow(
                 seat_key=f"house-XX-{i:02d}", cycle=cycle, chamber="house",
                 state="XX", district=f"{i:02d}", x=x,

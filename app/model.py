@@ -28,9 +28,12 @@ from .features import FEATURE_NAMES, FeatureRow
 
 DEFAULT_L2 = 4.0
 MIN_SIGMA = 4.0     # pct points; guards degenerate residual pools
-N_POLL_FEATURES = 2  # poll_average, has_polls sit at the end of the vector
+N_POLL_FEATURES = 2   # poll_average, has_polls sit at the end of the vector
+N_NATIONAL_FEATURES = 2  # generic_ballot, has_generic_ballot sit just before them
+N_TAIL = N_POLL_FEATURES + N_NATIONAL_FEATURES
 
 FUNDAMENTALS_NAMES = FEATURE_NAMES[:-N_POLL_FEATURES]
+CORE_NAMES = FEATURE_NAMES[:-N_TAIL]
 
 
 def _solve(matrix: list[list[float]], vector: list[float]) -> list[float]:
@@ -80,30 +83,63 @@ def _residual_sigma(residuals: list[float]) -> float:
 
 
 class MarginModel:
-    """Per-chamber full and fundamentals-only ridge fits with residual sigmas."""
+    """Per-chamber full and fundamentals-only ridge fits with residual sigmas.
 
-    def __init__(self, l2: float = DEFAULT_L2):
+    ``state_effects=True`` adds partial-pooled per-state offsets: the mean
+    training residual for each (chamber, state), shrunk toward zero by
+    n/(n+k) so a state's "personal pattern" only moves the forecast in
+    proportion to how much evidence supports it. This is the disciplined
+    form of state-specific modeling — a Maine offset estimated from Maine's
+    past surprises, not a hand-picked story — and it runs as a challenger:
+    it becomes champion only if it wins the walk-forward comparison.
+    """
+
+    def __init__(self, l2: float = DEFAULT_L2, state_effects: bool = False,
+                 state_shrinkage: float = 8.0, use_generic_ballot: bool = False):
+        # use_generic_ballot defaults False: the raw GB average DEGRADED
+        # held-out Brier in both chambers (see research claim N-001), so it
+        # is excluded from the champion and re-tested as a challenger on
+        # every run.
         self.l2 = l2
+        self.state_effects = state_effects
+        self.state_shrinkage = state_shrinkage
+        self.use_generic_ballot = use_generic_ballot
         self.weights: dict[str, dict[str, list[float]]] = {}
         self.sigma: dict[str, dict[str, float]] = {}
+        self.state_offset: dict[str, dict[str, float]] = {}
         self.training_meta: dict[str, dict] = {}
+
+    def _indices(self) -> dict[str, list[int]]:
+        base = list(range(len(CORE_NAMES)))
+        gb = [len(CORE_NAMES), len(CORE_NAMES) + 1] if self.use_generic_ballot else []
+        polls = [len(FEATURE_NAMES) - 2, len(FEATURE_NAMES) - 1]
+        return {"full": base + gb + polls, "fundamentals": base + gb, "core": base}
 
     def fit(self, rows: list[FeatureRow]) -> "MarginModel":
         by_chamber: dict[str, list[FeatureRow]] = {}
         for row in rows:
             if row.actual_margin is not None:
                 by_chamber.setdefault(row.chamber, []).append(row)
+        indices = self._indices()
         for chamber, chamber_rows in by_chamber.items():
             ys = [r.actual_margin for r in chamber_rows]
-            fund_xs = [r.x[:-N_POLL_FEATURES] for r in chamber_rows]
+            fund_xs = [[r.x[i] for i in indices["fundamentals"]] for r in chamber_rows]
             fund_weights = ridge_fit(fund_xs, ys, self.l2)
             fund_residuals = [
                 y - sum(w * v for w, v in zip(fund_weights, x))
                 for x, y in zip(fund_xs, ys)]
+            # Core tier: no race polls AND no generic ballot. Used when the
+            # current cycle has no national polling ingested yet, so the model
+            # never extrapolates through a feature absent at prediction time.
+            core_xs = [[r.x[i] for i in indices["core"]] for r in chamber_rows]
+            core_weights = ridge_fit(core_xs, ys, self.l2)
+            core_residuals = [
+                y - sum(w * v for w, v in zip(core_weights, x))
+                for x, y in zip(core_xs, ys)]
 
             polled = [r for r in chamber_rows if r.poll_count]
             if len(polled) >= 3 * len(FEATURE_NAMES):
-                full_xs = [r.x for r in polled]
+                full_xs = [[r.x[i] for i in indices["full"]] for r in polled]
                 full_ys = [r.actual_margin for r in polled]
                 full_weights = ridge_fit(full_xs, full_ys, self.l2)
                 full_residuals = [
@@ -112,23 +148,43 @@ class MarginModel:
             else:  # not enough polled history: everything routes to fundamentals
                 full_weights, full_residuals = None, fund_residuals
 
-            self.weights[chamber] = {"fundamentals": fund_weights, "full": full_weights}
+            self.weights[chamber] = {"fundamentals": fund_weights, "full": full_weights,
+                                     "core": core_weights}
             self.sigma[chamber] = {"fundamentals": _residual_sigma(fund_residuals),
-                                   "full": _residual_sigma(full_residuals)}
+                                   "full": _residual_sigma(full_residuals),
+                                   "core": _residual_sigma(core_residuals)}
             self.training_meta[chamber] = {
                 "n": len(chamber_rows), "n_polled": len(polled),
                 "cycles": sorted({r.cycle for r in chamber_rows}), "l2": self.l2,
             }
+            if self.state_effects:
+                by_state: dict[str, list[float]] = {}
+                for row in chamber_rows:
+                    residual = row.actual_margin - self._base_mean(row)
+                    by_state.setdefault(row.state, []).append(residual)
+                self.state_offset[chamber] = {
+                    state: (sum(vals) / len(vals)) * (len(vals) / (len(vals) + self.state_shrinkage))
+                    for state, vals in by_state.items()}
         return self
 
-    def predict(self, row: FeatureRow) -> Prediction:
+    def _tier(self, row: FeatureRow) -> str:
         chamber = self.weights[row.chamber]
-        use_full = row.poll_count > 0 and chamber["full"] is not None
-        if use_full:
-            weights, x, kind = chamber["full"], row.x, "full"
-        else:
-            weights, x, kind = chamber["fundamentals"], row.x[:-N_POLL_FEATURES], "fundamentals"
-        mean = sum(w * v for w, v in zip(weights, x))
+        if row.poll_count > 0 and chamber["full"] is not None:
+            return "full"
+        has_gb = row.x[len(CORE_NAMES) + 1] > 0
+        return "fundamentals" if (has_gb and self.use_generic_ballot) else "core"
+
+    def _base_mean(self, row: FeatureRow) -> float:
+        tier = self._tier(row)
+        weights = self.weights[row.chamber][tier]
+        x = [row.x[i] for i in self._indices()[tier]]
+        return sum(w * v for w, v in zip(weights, x))
+
+    def predict(self, row: FeatureRow) -> Prediction:
+        kind = self._tier(row)
+        mean = self._base_mean(row)
+        if self.state_effects:
+            mean += self.state_offset.get(row.chamber, {}).get(row.state, 0.0)
         sigma = self.sigma[row.chamber][kind]
         if not row.has_prior:
             sigma = sqrt(sigma ** 2 + 25.0)  # no seat history: add 5pt-sd term
@@ -136,12 +192,10 @@ class MarginModel:
 
     def forecast_payload(self, row: FeatureRow, race_id: str) -> dict:
         prediction = self.predict(row)
-        if prediction.model == "full":
-            names, weights, x = FEATURE_NAMES, self.weights[row.chamber]["full"], row.x
-        else:
-            names, weights, x = (FUNDAMENTALS_NAMES,
-                                 self.weights[row.chamber]["fundamentals"],
-                                 row.x[:-N_POLL_FEATURES])
+        idx = self._indices()[prediction.model]
+        names = [FEATURE_NAMES[i] for i in idx]
+        weights = self.weights[row.chamber][prediction.model]
+        x = [row.x[i] for i in idx]
         components = {name: round(w * v, 3)
                       for name, w, v in zip(names, weights, x) if v != 0}
         components["_model"] = prediction.model
@@ -165,13 +219,19 @@ class MarginModel:
     def to_json(self) -> str:
         return json.dumps({
             "feature_names": FEATURE_NAMES, "l2": self.l2,
+            "state_effects": self.state_effects,
+            "use_generic_ballot": self.use_generic_ballot,
+            "state_offset": self.state_offset,
             "weights": self.weights, "sigma": self.sigma,
             "training": self.training_meta})
 
     @classmethod
     def from_json(cls, payload: str) -> "MarginModel":
         data = json.loads(payload)
-        model = cls(l2=data.get("l2", DEFAULT_L2))
+        model = cls(l2=data.get("l2", DEFAULT_L2),
+                    state_effects=data.get("state_effects", False),
+                    use_generic_ballot=data.get("use_generic_ballot", False))
+        model.state_offset = data.get("state_offset", {})
         model.weights = data["weights"]
         model.sigma = data["sigma"]
         model.training_meta = data.get("training", {})

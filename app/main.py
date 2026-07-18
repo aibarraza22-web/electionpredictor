@@ -17,6 +17,8 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from . import db, store
+from .dashboard import DASHBOARD_HTML
+from .forecast import MODEL_VERSION
 from .simulation import simulate_control
 
 
@@ -69,43 +71,9 @@ def health_payload() -> dict:
     }
 
 
-DASHBOARD = """<!doctype html><title>Congressional Forecast Lab</title>
-<style>body{font:16px system-ui;max-width:1100px;margin:auto;background:#09111f;color:#e7eefb;padding:2rem}
-.banner{padding:1rem;border-radius:8px;margin-bottom:1rem}.live{background:#0f3d2e}.demo{background:#8b3b12}.unconfigured{background:#3d3d0f}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem}.card{background:#15233a;padding:1rem;border-radius:8px}
-a{color:#7fcbff}small{color:#9db2d0}</style>
-<h1>Congressional Forecast Lab</h1><div id=banner class=banner></div><div id=cards class=grid></div>
-<p><a href=/docs>OpenAPI</a> · <a href=/api/races?chamber=house>House races</a> · <a href=/api/backtests>Backtests</a> ·
-<a href=/api/research>Research registry</a> · <a href=/api/models>Models</a> · <a href=/api/data-health>Data health</a></p>
-<script>
-(async()=>{
- const h=await (await fetch('/api/data-health')).json();
- const banner=document.getElementById('banner'),cards=document.getElementById('cards');
- banner.className='banner '+h.mode;
- if(h.mode==='unconfigured'){
-  banner.innerHTML='<b>NOT CONFIGURED.</b> No data has been ingested; no forecasts exist yet. '+
-   'Run the ingestion + forecast pipeline (see DEPLOYMENT.md), then reload.';
-  cards.innerHTML='<div class=card><h2>Setup</h2>1. Provision PostgreSQL, set DATABASE_URL<br>2. python scripts/ingest.py<br>3. python scripts/forecast.py</div>';
-  return;
- }
- banner.innerHTML= h.mode==='live'
-  ? '<b>LIVE FORECAST.</b> Built from ingested primary sources as of '+h.last_forecast_as_of+
-    ' (data version '+h.data_version+'). '+(h.warnings.length?('<br><small>'+h.warnings.join(' ')+'</small>'):'')
-  : '<b>DEMO MODE — not live forecasting data.</b> '+h.warnings.join(' ');
- const c=await (await fetch('/api/forecast/control')).json();
- const pct=x=>(x*100).toFixed(1)+'%';
- cards.innerHTML=
-  '<div class=card><h2>House</h2><b>'+pct(c.house.democratic_control_probability)+'</b> Democratic control<br><small>median '+c.house.median_democratic_seats+' seats</small></div>'+
-  '<div class=card><h2>Senate</h2><b>'+pct(c.senate.democratic_control_probability)+'</b> Democratic control<br><small>median '+c.senate.median_democratic_seats+' seats</small></div>'+
-  '<div class=card><h2>Data</h2>'+h.counts.election_results+' results · '+h.counts.polls+' polls<br><small>'+
-    h.sources.map(s=>s.source).join(', ')+'</small></div>';
-})();
-</script>"""
-
-
 @app.get("/", response_class=HTMLResponse)
 def home():
-    return DASHBOARD
+    return DASHBOARD_HTML
 
 
 @app.get("/api/data-health")
@@ -128,7 +96,7 @@ def forecast_control():
 def forecast_chamber(chamber: str):
     if chamber not in ("house", "senate"):
         raise HTTPException(404)
-    snapshots = store.latest_forecasts(chamber)
+    snapshots = store.latest_forecasts(chamber, model_version=MODEL_VERSION)
     if not snapshots:
         raise HTTPException(404, "No forecasts stored; run the forecast pipeline.")
     return {"mode": current_mode(),
@@ -148,21 +116,36 @@ def get_race(race_id: str):
     race = store.get_race(race_id)
     if not race:
         raise HTTPException(404)
-    return {**race, "forecast": store.latest_forecast(race_id), "mode": current_mode()}
+    return {**race, "forecast": store.latest_forecast(race_id, MODEL_VERSION),
+            "mode": current_mode()}
 
 
 @app.get("/api/races/{race_id}/history")
 def race_history(race_id: str):
-    return store.forecast_history(race_id)
+    rows = store.forecast_history(race_id)
+    return [r for r in rows
+            if not r["model_version"].startswith(("baseline", "challenger"))]
 
 
 @app.get("/api/races/{race_id}/components")
 def race_components(race_id: str):
-    snapshot = store.latest_forecast(race_id)
+    snapshot = store.latest_forecast(race_id, MODEL_VERSION)
     if not snapshot:
         raise HTTPException(404)
     return {"race_id": race_id, "components": json.loads(snapshot["components"]),
             "as_of": snapshot["as_of"]}
+
+
+@app.get("/api/races/{race_id}/models")
+def race_models(race_id: str):
+    """Every model's latest prediction for this race — champion, challengers,
+    and baselines — so disagreement between methods is inspectable per race."""
+    rows = store.models_for_race(race_id)
+    if not rows:
+        raise HTTPException(404)
+    for row in rows:
+        row.pop("components", None)
+    return {"race_id": race_id, "champion": MODEL_VERSION, "models": rows}
 
 
 @app.get("/api/races/{race_id}/polls")
@@ -190,6 +173,16 @@ def race_finance(race_id: str):
 @app.get("/api/models")
 def models():
     return store.list_model_versions()
+
+
+# Registered before the dynamic model route so "comparison" is not
+# captured as a model_id.
+@app.get("/api/models/comparison")
+def model_comparison():
+    stored = store.get_meta("model_comparison")
+    if not stored:
+        raise HTTPException(404, "No comparison stored yet; run the forecast pipeline.")
+    return json.loads(stored)
 
 
 @app.get("/api/models/{model_id}")
@@ -265,7 +258,7 @@ def scenario(s: Scenario):
     out = {"label": "Scenario — not the official forecast",
            "national_environment": s.national_environment, "mode": current_mode()}
     for chamber, base_key in (("house", None), ("senate", "senate_dem_seats_not_up")):
-        snapshots = store.latest_forecasts(chamber)
+        snapshots = store.latest_forecasts(chamber, model_version=MODEL_VERSION)
         if not snapshots:
             raise HTTPException(404, "No forecasts stored; run the forecast pipeline.")
         shifted = [{**f, "margin": f["margin"] + s.national_environment} for f in snapshots]

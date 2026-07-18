@@ -18,7 +18,7 @@ from .model import MarginModel
 from .simulation import simulate_control
 
 CYCLE = 2026
-MODEL_VERSION = "2026.2"
+MODEL_VERSION = "2026.3"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {
@@ -38,6 +38,103 @@ SENATE_CLASS2 = ["AL", "AK", "AR", "CO", "DE", "GA", "ID", "IL", "IA", "KS",
                  "VA", "WV", "WY"]
 
 RANKED_CHOICE_STATES = {"AK", "ME"}
+
+# Research registry: every claim from the project mandate that the current
+# system operationalizes, with its honest lifecycle status. Validation always
+# points at stored, queryable evidence — never at prose.
+RESEARCH_CLAIMS = [
+    {"id": "H-001", "claim": "Seat partisan history (prior result) is a strong initial baseline.",
+     "chamber": "both", "metric": "prior_margin",
+     "mechanism": "Partisan alignment persists between cycles",
+     "status": "Production",
+     "validation": "Expanding-window: compare champion vs baseline-prior-result at /api/models/comparison",
+     "decision": "Included in both chamber models", "source": "Project research mandate"},
+    {"id": "H-002", "claim": "District polling deserves more weight closer to Election Day.",
+     "chamber": "both", "metric": "poll_average (21-day half-life decay)",
+     "mechanism": "Recent opinion measures current candidate standing",
+     "status": "Production",
+     "validation": "Horizon breakdown (0/30/90 days pre-election) stored in each champion backtest run config",
+     "decision": "Time-decayed average in polled tier", "source": "Project research mandate"},
+    {"id": "H-003", "claim": "Absence of polls is not evidence a race is tied.",
+     "chamber": "both", "metric": "two-tier model routing",
+     "mechanism": "Unpolled races fall back to fundamentals, with wider uncertainty",
+     "status": "Production",
+     "validation": "Separate fundamentals fit + unpolled subgroup metrics in run config",
+     "decision": "Dedicated fundamentals tier", "source": "Project research mandate"},
+    {"id": "H-004", "claim": "The president's party is penalized in midterms.",
+     "chamber": "both", "metric": "midterm_environment",
+     "mechanism": "Midterm referendum dynamics against the White House",
+     "status": "Production",
+     "validation": "Compare champion vs baseline-environment-only; midterm-cycle subgroup metrics",
+     "decision": "Environment + midterm interaction features", "source": "Project research mandate"},
+    {"id": "H-005", "claim": "Recently redrawn districts require greater uncertainty.",
+     "chamber": "house", "metric": "has_prior / lookback restriction",
+     "mechanism": "New boundaries break seat-history comparability",
+     "status": "Production",
+     "validation": "House prior lookback restricted to post-redistricting cycles; +5pt sigma when no prior",
+     "decision": "Structural: lookback limits + variance inflation", "source": "Project research mandate"},
+    {"id": "S-001", "claim": "Senate races are more candidate-sensitive than House races.",
+     "chamber": "senate", "metric": "chamber-specific residual sigma",
+     "mechanism": "Statewide personal brands decouple from partisanship",
+     "status": "Validated",
+     "validation": "Separate Senate fit; residual sigmas stored per chamber in model_versions.coefficients",
+     "decision": "Chamber-specific models (mandate requirement 6)", "source": "Project research mandate"},
+    {"id": "F-001", "claim": "Challenger fundraising may be more informative than total spending.",
+     "chamber": "both", "metric": "FEC receipts/cash-on-hand",
+     "mechanism": "Money proxies candidate quality and enthusiasm",
+     "status": "Collecting data",
+     "validation": "FEC adapter ingests live totals; NO historical vintage series yet, so no leakage-safe backtest is possible",
+     "decision": "Displayed per race; excluded from the model until vintage-tested",
+     "source": "Project research mandate"},
+    {"id": "A-001", "claim": "Alaska/Maine ranked-choice races need transfer-round simulation.",
+     "chamber": "senate", "metric": "election_system flag",
+     "mechanism": "Multi-candidate elimination changes win conditions",
+     "status": "Proposed",
+     "validation": "Not yet modeled; races are flagged ranked_choice and carry standard uncertainty",
+     "decision": "Open challenger-model slot; margins for AK/ME treated as two-party approximations",
+     "source": "Project research mandate"},
+    {"id": "P-001", "claim": "Polling errors are correlated within a cycle, not independent.",
+     "chamber": "both", "metric": "shared national shock (3.5pt sigma)",
+     "mechanism": "Common-mode polling and environment misses",
+     "status": "Production",
+     "validation": "Margin-space control simulation decomposes national vs idiosyncratic error",
+     "decision": "Correlated simulation structure", "source": "Project research mandate"},
+    {"id": "N-001", "claim": "REPORTED FAILURE: the raw generic-ballot average worsened held-out "
+                             "accuracy in both chambers and was rejected from the champion.",
+     "chamber": "both", "metric": "generic_ballot (time-decayed national average)",
+     "mechanism": "GB polls carry cycle-varying partisan bias that ~10 training cycles "
+                  "cannot separate from real environment shifts",
+     "status": "Rejected for no predictive value",
+     "validation": "challenger-generic-ballot vs champion at /api/models/comparison "
+                   "(identical walk-forward protocol); 883 GB polls remain ingested",
+     "decision": "Excluded from champion; auto-re-tested as a challenger every run so "
+                 "promotion happens on evidence if live 2026 data changes the verdict. "
+                 "A bias-corrected GB (house-effect adjusted) is the natural next experiment",
+     "source": "This project's own backtests"},
+    {"id": "S-002", "claim": "State-specific effects (partial-pooled per-state residual offsets) "
+                             "are the disciplined form of 'niche state metrics'.",
+     "chamber": "both", "metric": "shrunken per-state training-residual offsets (k=8)",
+     "mechanism": "Persistent state-level polling/candidate error (e.g. Maine's history of "
+                  "fundamentals misses) earns a data-sized correction, not a hand-picked story",
+     "status": "Experimental",
+     "validation": "challenger-state-effects vs champion at /api/models/comparison; "
+                   "per-race disagreement visible at /api/races/{id}/models",
+     "decision": "Runs as a challenger every cycle; promoted only on a robust "
+                 "walk-forward win in both chambers",
+     "source": "Project research mandate + user hypothesis"},
+    {"id": "P-002", "claim": "REPORTED FAILURE: at election-eve cutoff the polls-only baseline "
+                             "marginally beats the blended model on polled races.",
+     "chamber": "both", "metric": "baseline-polls-only vs champion",
+     "mechanism": "Election-eve polling already impounds most fundamentals information",
+     "status": "Experimental",
+     "validation": "See /api/models/comparison (identical walk-forward protocol); the blend "
+                   "remains ahead of every fundamentals baseline and is required for the "
+                   "~78% of 2026 races with no polling",
+     "decision": "Champion retained for full-universe coverage; a higher-poll-weight "
+                 "challenger is the top open experiment. Not silently tuned away, per "
+                 "the no-post-hoc-fitting rule",
+     "source": "This project's own backtests"},
+]
 
 
 def build_race_universe() -> list[dict]:
@@ -86,6 +183,67 @@ def data_version(counts: dict, prefix: str = "live") -> str:
     return f"{prefix}-{date.today().isoformat()}-r{counts['election_results']}-p{counts['polls']}"
 
 
+def _store_alternative_model_snapshots(training, feature_rows, as_of, version):
+    """Per-race predictions for every challenger and baseline, so users can
+    switch between models on any race and see where they disagree. All are
+    labelled by model_version; the champion alone drives ratings and control
+    simulations."""
+    from statistics import pstdev
+
+    from .backtest import BASELINES, CHALLENGERS
+    from .domain import normal_cdf, rating
+    from .model import MIN_SIGMA, MarginModel, ridge_fit
+
+    alternatives = []
+    for name, model_kwargs in CHALLENGERS.items():
+        challenger = MarginModel(**model_kwargs).fit(training)
+        for race_id, row in feature_rows.items():
+            p = challenger.predict(row)
+            low80, high80 = p.interval(1.282)
+            low95, high95 = p.interval(1.960)
+            alternatives.append({
+                "race_id": race_id, "as_of": as_of, "model_version": name,
+                "data_version": version,
+                "dem_probability": round(p.dem_probability, 4),
+                "margin": round(p.mean, 2),
+                "low80": round(low80, 2), "high80": round(high80, 2),
+                "low95": round(low95, 2), "high95": round(high95, 2),
+                "rating": rating(p.dem_probability), "quality": "-",
+                "components": json.dumps({"_model": name})})
+    for name, spec in BASELINES.items():
+        idx = spec["features"]
+        by_chamber: dict[str, tuple[list[float], float]] = {}
+        for chamber in ("house", "senate"):
+            rows = [r for r in training if r.chamber == chamber
+                    and (not spec["polled_only"] or r.poll_count > 0)]
+            if len(rows) < 30:
+                continue
+            xs = [[r.x[i] for i in idx] for r in rows]
+            ys = [r.actual_margin for r in rows]
+            weights = ridge_fit(xs, ys)
+            residuals = [y - sum(w * v for w, v in zip(weights, x))
+                         for x, y in zip(xs, ys)]
+            by_chamber[chamber] = (weights, max(MIN_SIGMA, pstdev(residuals)))
+        for race_id, row in feature_rows.items():
+            if row.chamber not in by_chamber:
+                continue
+            if spec["polled_only"] and row.poll_count == 0:
+                continue  # a polls-only model has nothing to say without polls
+            weights, sigma = by_chamber[row.chamber]
+            mean = sum(w * row.x[i] for w, i in zip(weights, idx))
+            probability = min(.995, max(.005, normal_cdf(mean / sigma)))
+            alternatives.append({
+                "race_id": race_id, "as_of": as_of, "model_version": name,
+                "data_version": version,
+                "dem_probability": round(probability, 4),
+                "margin": round(mean, 2),
+                "low80": round(mean - 1.282 * sigma, 2), "high80": round(mean + 1.282 * sigma, 2),
+                "low95": round(mean - 1.960 * sigma, 2), "high95": round(mean + 1.960 * sigma, 2),
+                "rating": rating(probability), "quality": "-",
+                "components": json.dumps({"_model": name})})
+    store.insert_forecasts(alternatives)
+
+
 def build_forecasts(as_of: str | None = None, prefix: str = "live",
                     with_backtests: bool = True) -> dict:
     """Train on ingested history, freeze snapshots, store control simulations."""
@@ -109,23 +267,26 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     version = data_version(store.counts(), prefix)
     snapshots = []
     feature_meta = {}
+    feature_rows = {}
     for race in races:
         row = build_row(race["seat_key"], CYCLE, race["chamber"], race["state"],
                         race["district"], results, poll_lookup, as_of,
                         holder_party=race["incumbent_party"])
+        feature_rows[race["id"]] = row
         payload = model.forecast_payload(row, race["id"])
         payload.update({"as_of": as_of, "model_version": MODEL_VERSION,
                         "data_version": version})
         snapshots.append(payload)
         feature_meta[race["id"]] = {"has_prior": row.has_prior, "poll_count": row.poll_count}
     inserted = store.insert_forecasts(snapshots)
+    _store_alternative_model_snapshots(training, feature_rows, as_of, version)
 
     control = {}
     for chamber, base in (("house", 0), ("senate", int(store.get_meta("senate_dem_seats_not_up") or 0))):
-        # Simulate from what is actually persisted, so snapshots and control
-        # numbers can never disagree (snapshots are immutable: a same-day
-        # rerun keeps the first frozen set).
-        stored = store.latest_forecasts(chamber)
+        # Simulate from the champion's persisted snapshots, so snapshots and
+        # control numbers can never disagree (snapshots are immutable: a
+        # same-day rerun keeps the first frozen set).
+        stored = store.latest_forecasts(chamber, model_version=MODEL_VERSION)
         control[chamber] = simulate_control(stored, chamber, base_dem_seats=base)
         store.save_control_snapshot(stored[0]["as_of"], chamber, MODEL_VERSION,
                                     stored[0]["data_version"], control[chamber])
@@ -136,6 +297,7 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
         "description": "Chamber-specific ridge regression on vintage-safe "
                        "fundamentals + time-decayed polling averages",
         "coefficients": model.to_json()})
+    store.seed_research_claims(RESEARCH_CLAIMS)
     backtests = run_backtests(MODEL_VERSION) if with_backtests else []
     store.set_meta("last_forecast_as_of", as_of)
     store.set_meta("last_data_version", version)

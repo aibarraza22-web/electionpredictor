@@ -19,8 +19,15 @@ PRESIDENT_PARTY = {
 
 FEATURE_NAMES = [
     "intercept", "prior_margin", "has_prior", "prior_winner",
-    "environment", "midterm_environment", "poll_average", "has_polls",
+    "environment", "midterm_environment",
+    "generic_ballot", "has_generic_ballot",
+    "poll_average", "has_polls",
 ]
+
+# National generic-congressional-ballot polls are stored under this seat key
+# (chamber "national"); their time-decayed average is a shared environment
+# input available to every race, polled or not.
+GENERIC_BALLOT_SEAT = "us-generic"
 
 # Result sources ranked by authority when several report the same seat-cycle.
 SOURCE_PRIORITY = ["official-results-csv", "medsl-constituency-returns",
@@ -145,9 +152,11 @@ def build_row(seat_key: str, cycle: int, chamber: str, state: str,
               holder_party: str | None = None) -> FeatureRow:
     prior_margin, prior_cycle = results.prior(cycle, seat_key, chamber)
     poll_avg, poll_count, last_poll = poll_lookup.average(cycle, seat_key, as_of)
+    gb_avg, gb_count, _ = poll_lookup.average(cycle, GENERIC_BALLOT_SEAT, as_of)
     environment, midterm_environment = environment_signs(cycle)
     has_prior = prior_margin is not None
     has_polls = poll_avg is not None
+    has_gb = gb_avg is not None
     if has_prior and prior_margin != 0:
         prior_winner = 1.0 if prior_margin > 0 else -1.0
     else:
@@ -161,6 +170,8 @@ def build_row(seat_key: str, cycle: int, chamber: str, state: str,
         prior_winner,
         environment,
         midterm_environment,
+        clip(gb_avg, 25.0) if has_gb else 0.0,
+        1.0 if has_gb else 0.0,
         poll_avg if has_polls else 0.0,
         1.0 if has_polls else 0.0,
     ]

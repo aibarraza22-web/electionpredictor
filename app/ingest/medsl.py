@@ -50,15 +50,29 @@ def _dataset_file_urls(doi: str) -> list[tuple[str, str]]:
 
 
 def _fetch_datafile(file_id: int) -> bytes:
-    """Dataverse rejects ``format=original`` for files it has no distinct
-    original upload for (HTTP 400); fall back to the archival/ingested copy,
-    which is a normalized, still-authoritative CSV/TSV."""
-    try:
-        return fetch(f"{DATAVERSE}/api/access/datafile/{file_id}?format=original")
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code != 400:
-            raise
-        return fetch(f"{DATAVERSE}/api/access/datafile/{file_id}")
+    """Three-tier fallback for Dataverse's file-access quirks, each a
+    documented cause of an HTTP 400/403 on this endpoint:
+
+    1. ``format=original`` - fails when Dataverse stored no distinct
+       original upload separate from its ingested/archival copy.
+    2. plain access - the archival copy; fails for guestbook-gated files.
+    3. ``gbrecs=true`` - explicitly answers "yes" to a dataset's guestbook
+       requirement so the download proceeds without an interactive form.
+    """
+    urls = [
+        f"{DATAVERSE}/api/access/datafile/{file_id}?format=original",
+        f"{DATAVERSE}/api/access/datafile/{file_id}",
+        f"{DATAVERSE}/api/access/datafile/{file_id}?gbrecs=true",
+    ]
+    last_error: httpx.HTTPStatusError | None = None
+    for url in urls:
+        try:
+            return fetch(url)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in (400, 403):
+                raise
+            last_error = exc
+    raise last_error
 
 
 def parse(payload: bytes, chamber: str) -> list[dict]:

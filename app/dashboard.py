@@ -344,7 +344,7 @@ async function main(){
     models.sort((a,b)=>(a===cmp.champion?-1:b===cmp.champion?1:a.localeCompare(b)));
     $("#cmpTable thead").innerHTML="<tr><th>Model</th>"+chambers.map(c=>`<th>${c} Brier</th><th>${c} log loss</th><th>${c} acc.</th><th>${c} MAE</th>`).join("")+"</tr>";
     $("#cmpTable tbody").innerHTML=models.map(m=>{
-      const cells=chambers.map(c=>{const x=cmp.chambers[c][m]; return x?`<td class="mono">${fmt(x.brier)}</td><td class="mono">${fmt(x.log_loss)}</td><td class="mono">${pct(x.winner_accuracy)}</td><td class="mono">${fmt(x.margin_mae,2)}</td>`:"<td>—</td><td>—</td><td>—</td><td>—</td>;}).join("");
+      const cells=chambers.map(c=>{const x=cmp.chambers[c][m]; return x?`<td class="mono">${fmt(x.brier)}</td><td class="mono">${fmt(x.log_loss)}</td><td class="mono">${pct(x.winner_accuracy)}</td><td class="mono">${fmt(x.margin_mae,2)}</td>`:"<td>—</td><td>—</td><td>—</td><td>—</td>";}).join("");
       return `<tr style="cursor:default"><td>${m===cmp.champion?`<b>${esc(m)} (champion)</b>`:esc(m)}</td>${cells}</tr>`;}).join("");
     $("#cmpNote").textContent=cmp.note;
   }catch(e){ /* comparisons appear after the first pipeline run */ }

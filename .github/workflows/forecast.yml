@@ -2,6 +2,8 @@ name: Scheduled forecast pipeline
 # Ingests primary sources and rebuilds the forecast against the production
 # database. Requires the DATABASE_URL GitHub secret (managed PostgreSQL, e.g. Neon
 # or Vercel Postgres). Optional: FEC_API_KEY secret for campaign finance,
+# DATAVERSE_API_KEY secret for the guestbook-gated MEDSL House returns file
+# (see app/ingest/medsl.py docstring for the one-time account setup),
 # POLLS_FEED_URL repository variable for a live 2026 polling feed
 # (any CSV in the FiveThirtyEight raw-polls schema).
 on:
@@ -15,6 +17,7 @@ jobs:
       # DATEBASE_URL (see app/db.py), so it's remapped here.
       DATEBASE_URL: ${{ secrets.DATABASE_URL }}
       FEC_API_KEY: ${{ secrets.FEC_API_KEY }}
+      DATAVERSE_API_KEY: ${{ secrets.DATAVERSE_API_KEY }}
       POLLS_FEED_URL: ${{ vars.POLLS_FEED_URL }}
     steps:
       - uses: actions/checkout@v4

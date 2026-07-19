@@ -3,7 +3,7 @@ services:
     build: .
     ports: ["8000:8000"]
     environment:
-      DATABASE_URL: postgresql://forecast:forecast@db:5432/forecast
+      DATEBASE_URL: postgresql://forecast:forecast@db:5432/forecast
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       FEC_API_KEY: ${FEC_API_KEY:-}
     depends_on:

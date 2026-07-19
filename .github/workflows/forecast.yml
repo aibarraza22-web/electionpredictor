@@ -1,6 +1,6 @@
 name: Scheduled forecast pipeline
 # Ingests primary sources and rebuilds the forecast against the production
-# database. Requires the DATABASE_URL secret (managed PostgreSQL, e.g. Neon
+# database. Requires the DATABASE_URL GitHub secret (managed PostgreSQL, e.g. Neon
 # or Vercel Postgres). Optional: FEC_API_KEY secret for campaign finance,
 # POLLS_FEED_URL repository variable for a live 2026 polling feed
 # (any CSV in the FiveThirtyEight raw-polls schema).
@@ -11,7 +11,9 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # The GitHub secret keeps the name DATABASE_URL; the app code reads
+      # DATEBASE_URL (see app/db.py), so it's remapped here.
+      DATEBASE_URL: ${{ secrets.DATABASE_URL }}
       FEC_API_KEY: ${{ secrets.FEC_API_KEY }}
       POLLS_FEED_URL: ${{ vars.POLLS_FEED_URL }}
     steps:
@@ -21,7 +23,7 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Require production database
         run: |
-          if [ -z "$DATABASE_URL" ]; then
+          if [ -z "$DATEBASE_URL" ]; then
             echo "::warning::DATABASE_URL secret not configured; skipping live refresh."
             echo "SKIP=1" >> "$GITHUB_ENV"
           fi

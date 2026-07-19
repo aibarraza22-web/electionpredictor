@@ -15,7 +15,7 @@ nothing has been ingested.
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 
-# optional: export DATABASE_URL=postgresql://... (defaults to local SQLite)
+# optional: export DATEBASE_URL=postgresql://... (defaults to local SQLite)
 python scripts/ingest.py           # real polls, results, incumbency (+MEDSL/FEC where reachable)
 python scripts/forecast.py         # train, backtest, freeze snapshots, simulate control
 uvicorn app.main:app --reload      # http://localhost:8000 and /docs

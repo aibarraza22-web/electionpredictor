@@ -12,7 +12,7 @@ from app import db  # noqa: E402
 @pytest.fixture()
 def temp_db(tmp_path, monkeypatch):
     """Isolated SQLite database per test."""
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATEBASE_URL", raising=False)
     monkeypatch.delenv("VERCEL", raising=False)
     monkeypatch.setenv("SQLITE_PATH", str(tmp_path / "test.sqlite"))
     db.reset_engine()

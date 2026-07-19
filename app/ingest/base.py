@@ -14,9 +14,9 @@ STATES = {
 }
 
 
-def fetch(url: str, timeout: float = 120.0) -> bytes:
+def fetch(url: str, timeout: float = 120.0, headers: dict | None = None) -> bytes:
     with httpx.Client(follow_redirects=True, timeout=timeout) as client:
-        response = client.get(url)
+        response = client.get(url, headers=headers)
         response.raise_for_status()
         return response.content
 

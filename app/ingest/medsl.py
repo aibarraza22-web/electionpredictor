@@ -7,16 +7,36 @@ Dataverse (CC0 public domain):
 * U.S. Senate 1976-2020 — doi:10.7910/DVN/PEJ5QU
 
 and normalizes them to per-seat two-party margins. This is the authoritative
-full-coverage historical results source; it requires outbound access to
-``dataverse.harvard.edu`` (available in the scheduled GitHub Actions pipeline
-and local runs; some sandboxed environments block it, in which case the
-polled-race outcomes from the FiveThirtyEight adapter remain available).
+full-coverage historical results source; without it the model only sees
+seat history for districts that happened to be polled (the FiveThirtyEight
+adapter's coverage), which is most House districts.
+
+The House file is guestbook-gated: Dataverse returns 400 with
+``"You may not download this file without the required Guestbook
+response"`` for anonymous/unauthenticated requests, no matter the query
+parameters. There is no anonymous bypass — a real person must satisfy the
+guestbook once, then requests authenticated as that person work going
+forward. Set up once (~5 minutes):
+
+1. Create a free account at https://dataverse.harvard.edu (top-right "Log In",
+   sign up or use an existing Google/GitHub/ORCID login).
+2. Visit the House dataset: https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/IG0UN2
+   and click to access/download the House returns file. Filling in the
+   guestbook form (name/email/institution/purpose) once satisfies it for
+   that account permanently.
+3. Generate an API token: account menu (top-right) → API Token → Create Token.
+4. Set it as the ``DATAVERSE_API_KEY`` secret/environment variable.
+
+Without that token this adapter still successfully pulls the (ungated)
+Senate file; the House file is skipped with a clear, honest failure message
+rather than a crash.
 """
 from __future__ import annotations
 
 import csv
 import io
 import json
+import os
 from collections import defaultdict
 
 import httpx
@@ -36,9 +56,15 @@ DEM_PARTIES = {"DEMOCRAT", "DEMOCRATIC-FARMER-LABOR", "DEMOCRATIC-NPL"}
 REP_PARTIES = {"REPUBLICAN"}
 
 
+def _auth_headers() -> dict | None:
+    key = os.getenv("DATAVERSE_API_KEY")
+    return {"X-Dataverse-key": key} if key else None
+
+
 def _dataset_file_urls(doi: str) -> list[tuple[str, str]]:
     listing = json.loads(fetch(
-        f"{DATAVERSE}/api/datasets/:persistentId?persistentId={doi}").decode("utf-8"))
+        f"{DATAVERSE}/api/datasets/:persistentId?persistentId={doi}",
+        headers=_auth_headers()).decode("utf-8"))
     files = listing["data"]["latestVersion"]["files"]
     urls = []
     for f in files:
@@ -50,24 +76,19 @@ def _dataset_file_urls(doi: str) -> list[tuple[str, str]]:
 
 
 def _fetch_datafile(file_id: int) -> bytes:
-    """Three-tier fallback for Dataverse's file-access quirks, each a
-    documented cause of an HTTP 400/403 on this endpoint:
-
-    1. ``format=original`` - fails when Dataverse stored no distinct
-       original upload separate from its ingested/archival copy.
-    2. plain access - the archival copy; fails for guestbook-gated files.
-    3. ``gbrecs=true`` - explicitly answers "yes" to a dataset's guestbook
-       requirement so the download proceeds without an interactive form.
-    """
+    """Try the ingested/archival copy, then the distinct original upload
+    (some files have no archival copy and 400 on the plain endpoint) —
+    both authenticated with DATAVERSE_API_KEY when configured, required
+    for guestbook-gated files (see module docstring)."""
+    headers = _auth_headers()
     urls = [
-        f"{DATAVERSE}/api/access/datafile/{file_id}?format=original",
         f"{DATAVERSE}/api/access/datafile/{file_id}",
-        f"{DATAVERSE}/api/access/datafile/{file_id}?gbrecs=true",
+        f"{DATAVERSE}/api/access/datafile/{file_id}?format=original",
     ]
     last_error: httpx.HTTPStatusError | None = None
     for url in urls:
         try:
-            return fetch(url)
+            return fetch(url, headers=headers)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code not in (400, 403):
                 raise

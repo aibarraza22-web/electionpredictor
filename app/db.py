@@ -1,6 +1,6 @@
 """Database layer.
 
-Production persistence is PostgreSQL, selected with ``DATABASE_URL``
+Production persistence is PostgreSQL, selected with ``DATEBASE_URL``
 (e.g. Neon, Vercel Postgres, RDS). Without it the app falls back to a local
 SQLite file so development and tests need no external service. On Vercel the
 filesystem is ephemeral, so a SQLite fallback there is explicitly flagged as
@@ -212,7 +212,7 @@ _engine: Engine | None = None
 
 
 def database_url() -> str:
-    url = os.getenv("DATABASE_URL", "").strip()
+    url = os.getenv("DATEBASE_URL", "").strip()
     if url:
         # Accept the common postgres:// shorthand used by managed providers.
         if url.startswith("postgres://"):
@@ -250,7 +250,7 @@ def get_engine() -> Engine:
 
 
 def reset_engine() -> None:
-    """Dispose the cached engine (used by tests switching DATABASE_URL)."""
+    """Dispose the cached engine (used by tests switching DATEBASE_URL)."""
     global _engine
     if _engine is not None:
         _engine.dispose()

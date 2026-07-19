@@ -54,7 +54,7 @@ def health_payload() -> dict:
                         "scripts/forecast.py (or the scheduled pipeline).")
     if not db.is_durable():
         warnings.append("SQLite on serverless storage is ephemeral; set "
-                        "DATABASE_URL to a managed PostgreSQL instance.")
+                        "DATEBASE_URL to a managed PostgreSQL instance.")
     if mode == "live" and not counts["backtest_runs"]:
         warnings.append("No validated backtest run stored; treat forecasts as unvalidated.")
     coverage = store.get_meta("coverage")

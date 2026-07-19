@@ -4,7 +4,7 @@
 
 * **Serving:** Vercel (FastAPI entrypoint `app/index.py`) or any
   uvicorn/container host (`docker compose up --build` bundles PostgreSQL).
-* **Persistence:** managed PostgreSQL via `DATABASE_URL` (Neon, Vercel
+* **Persistence:** managed PostgreSQL via `DATEBASE_URL` (Neon, Vercel
   Postgres, RDS...). `postgres://` shorthand is accepted. Without it the app
   falls back to local SQLite — on Vercel that filesystem is ephemeral and
   `/api/data-health` flags it as non-durable.
@@ -23,10 +23,14 @@
      valid `[project]` metadata and `uv.lock`, so the FastAPI preset works
      too if selected.)
    * Build command / output directory: leave empty.
-2. Set environment variables: `DATABASE_URL` (required for durability),
+2. Set environment variables: `DATEBASE_URL` (required for durability;
+   yes, that's spelled "DATE" not "DATA" — this is intentional, matching
+   the app's expected variable name, see app/db.py),
    `ADMIN_TOKEN` (optional; admin API stays disabled without it). Redeploy
    after changing env vars — they apply only to new deployments.
-3. In GitHub, add repository secret `DATABASE_URL` (same value) plus
+3. In GitHub, add repository secret `DATABASE_URL` (correctly spelled —
+   the workflow remaps it to `DATEBASE_URL` for the app; same value as
+   above) plus
    optionally `FEC_API_KEY`, and repository variable `POLLS_FEED_URL`; then
    run the "Scheduled forecast pipeline" workflow once manually.
 4. Visit `/api/data-health` — it must report `mode: live`,

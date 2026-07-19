@@ -9,7 +9,7 @@ scripts/ingest.py                          app/main.py   FastAPI + dashboard
                    polls, incumbents,      app/index.py  Vercel entrypoint
                    finance
 scripts/forecast.py
-  app/features.py  vintage-safe rows   ──►  PostgreSQL (DATABASE_URL)
+  app/features.py  vintage-safe rows   ──►  PostgreSQL (DATEBASE_URL)
   app/model.py     ridge fits               SQLite fallback for local dev
   app/backtest.py  walk-forward runs
   app/forecast.py  race universe,

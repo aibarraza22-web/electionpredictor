@@ -18,7 +18,7 @@ from .model import MarginModel
 from .simulation import simulate_control
 
 CYCLE = 2026
-MODEL_VERSION = "2026.3"
+MODEL_VERSION = "2026.4"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {
@@ -134,6 +134,33 @@ RESEARCH_CLAIMS = [
                  "challenger is the top open experiment. Not silently tuned away, per "
                  "the no-post-hoc-fitting rule",
      "source": "This project's own backtests"},
+    {"id": "N-002", "claim": "FIXED BUG: the control simulation's shared national-shock size "
+                             "was a hardcoded constant (3.5pts), understating real cycle-to-"
+                             "cycle correlated error and producing false aggregate certainty.",
+     "chamber": "house", "metric": "national_error_sigma (backtest.national_error_sigma)",
+     "mechanism": "Individual-seat sigma was correctly wide (~26pts, core tier), but the "
+                  "simulation treated most of it as independent per-seat noise; independent "
+                  "noise across 435 seats washes out via the law of large numbers, turning "
+                  "a modest average lean into near-certainty at the chamber level. The MEDSL "
+                  "House backfill (raising seat-prior coverage from 105/470 to 468/470) made "
+                  "this visible: House control jumped to 95.9% Democratic against an actual "
+                  "current chamber of 218R/212D",
+     "status": "Production",
+     "validation": "national_error_sigma computed from the SD of out-of-sample walk-forward "
+                   "cycle-level mean error (14 House cycles: -10.6 to +10.1pts observed) - "
+                   "5.52pts, not 3.5. Verified the fix moves House control from an implausible "
+                   "95.9% to 87.8% and the rating distribution from 378 Toss-ups (uninformative "
+                   "core-tier default) to a realistic 215D/194R/26-toss-up split matching the "
+                   "real chamber's near-even composition",
+     "decision": "national_sigma is now computed per chamber from real backtest history and "
+                 "wired through simulate_control(); no more hardcoded constant. Ruled out "
+                 "alternative causes first: per-cycle-feature ridge shrinkage (0-100x sweep) "
+                 "barely moved the aggregate number, and pooled calibration bins were "
+                 "reasonable - the bug was specifically in how per-seat uncertainty was "
+                 "decomposed into shared-vs-independent components for the simulation, not "
+                 "in the margin coefficients themselves",
+     "source": "This project's own backtests, investigated live in response to a user-observed "
+              "implausible 2026 forecast"},
 ]
 
 
@@ -281,16 +308,6 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     inserted = store.insert_forecasts(snapshots)
     _store_alternative_model_snapshots(training, feature_rows, as_of, version)
 
-    control = {}
-    for chamber, base in (("house", 0), ("senate", int(store.get_meta("senate_dem_seats_not_up") or 0))):
-        # Simulate from the champion's persisted snapshots, so snapshots and
-        # control numbers can never disagree (snapshots are immutable: a
-        # same-day rerun keeps the first frozen set).
-        stored = store.latest_forecasts(chamber, model_version=MODEL_VERSION)
-        control[chamber] = simulate_control(stored, chamber, base_dem_seats=base)
-        store.save_control_snapshot(stored[0]["as_of"], chamber, MODEL_VERSION,
-                                    stored[0]["data_version"], control[chamber])
-
     store.upsert_model_version({
         "id": MODEL_VERSION, "chamber": "both", "status": "champion",
         "created_at": store.now(),
@@ -298,7 +315,24 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
                        "fundamentals + time-decayed polling averages",
         "coefficients": model.to_json()})
     store.seed_research_claims(RESEARCH_CLAIMS)
+    # Backtests run before the control simulation: they compute the
+    # empirical national-shock size (see backtest.national_error_sigma) that
+    # the simulation needs to avoid false aggregate certainty from averaging
+    # away correlated seat-level errors.
     backtests = run_backtests(MODEL_VERSION) if with_backtests else []
+
+    control = {}
+    for chamber, base in (("house", 0), ("senate", int(store.get_meta("senate_dem_seats_not_up") or 0))):
+        # Simulate from the champion's persisted snapshots, so snapshots and
+        # control numbers can never disagree (snapshots are immutable: a
+        # same-day rerun keeps the first frozen set).
+        stored = store.latest_forecasts(chamber, model_version=MODEL_VERSION)
+        nat_sigma = store.get_meta(f"national_sigma_{chamber}")
+        kwargs = {"national_sigma": float(nat_sigma)} if nat_sigma else {}
+        control[chamber] = simulate_control(stored, chamber, base_dem_seats=base, **kwargs)
+        store.save_control_snapshot(stored[0]["as_of"], chamber, MODEL_VERSION,
+                                    stored[0]["data_version"], control[chamber])
+
     store.set_meta("last_forecast_as_of", as_of)
     store.set_meta("last_data_version", version)
     coverage = {

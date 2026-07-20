@@ -77,6 +77,26 @@ def metrics(scored: list[dict]) -> dict:
             "coverage95": round(coverage95, 3), "calibration": bins}
 
 
+def national_error_sigma(scored: list[dict], min_cycles: int = 5) -> float | None:
+    """Standard deviation of out-of-sample cycle-level mean prediction error
+    (predicted - actual, averaged within each held-out cycle).
+
+    Individual-seat sigma alone cannot tell a control simulation how much
+    error is genuinely *shared* across seats in a given cycle (a national
+    swing) versus independent per-seat noise that washes out over hundreds
+    of seats. This directly measures the shared component from real
+    historical misses, cycle by cycle - not a guessed constant. Returns
+    None with too few evaluated cycles for the estimate to mean anything.
+    """
+    by_cycle: dict[int, list[float]] = {}
+    for s in scored:
+        by_cycle.setdefault(s["cycle"], []).append(s["predicted_margin"] - s["actual_margin"])
+    if len(by_cycle) < min_cycles:
+        return None
+    cycle_means = [sum(errs) / len(errs) for errs in by_cycle.values()]
+    return pstdev(cycle_means)
+
+
 def walk_forward(rows: list[FeatureRow], chamber: str,
                  min_training_cycles: int = MIN_TRAINING_CYCLES,
                  model_kwargs: dict | None = None) -> tuple[list[dict], list[int]]:
@@ -211,6 +231,9 @@ def run_backtests(model_version: str) -> list[dict]:
         by_cycle = {
             str(cycle): metrics([s for s in scored if s["cycle"] == cycle])
             for cycle in evaluated}
+        nat_sigma = national_error_sigma(scored)
+        if nat_sigma is not None:
+            store.set_meta(f"national_sigma_{chamber}", str(round(nat_sigma, 3)))
         run = {
             "id": f"bt-{chamber}-{uuid4().hex[:10]}",
             "run_at": store.now(), "model_version": model_version,
@@ -227,8 +250,13 @@ def run_backtests(model_version: str) -> list[dict]:
                 "poll_cutoff": "election day", "min_training_cycles": MIN_TRAINING_CYCLES,
                 "subgroups": subgroup_metrics(scored, rows_by_key),
                 "horizons_days_before_election": horizon_metrics(results, poll_lookup, chamber),
+                "national_error_sigma_pts": nat_sigma,
                 "note": "coverage reflects ingested sources; polled-race-only cycles "
-                        "over-represent competitive districts"}),
+                        "over-represent competitive districts. national_error_sigma_pts "
+                        "is the SD of out-of-sample cycle-level mean prediction error - "
+                        "used by the control simulation as the shared national-shock size, "
+                        "so aggregate control probability reflects real historical "
+                        "cycle-to-cycle swings rather than averaging away seat uncertainty"}),
         }
         store.save_backtest_run(run)
         runs.append(run)

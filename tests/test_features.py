@@ -1,4 +1,4 @@
-from app.features import PollLookup, ResultLookup, build_row, environment_signs
+from app.features import PollLookup, ResultLookup, StateLean, build_row, environment_signs
 
 
 def _result(cycle, seat_key, margin, chamber="senate", source="fivethirtyeight-raw-polls"):
@@ -57,3 +57,34 @@ def test_holder_party_fallback_when_no_prior():
     row_r = build_row("house-CA-30", 2026, "house", "CA", "30", results, polls,
                       "2026-07-17", holder_party="R")
     assert row_r.x[3] == -1.0
+
+
+def test_redrawn_district_drops_stale_prior_but_keeps_state_lean():
+    # A CA district (mid-decade remap for 2026): its 2024 result is on lines
+    # that no longer exist, so the district prior must be dropped, while the
+    # statewide lean (which redistricting cannot change) is retained.
+    results = ResultLookup([
+        _result(2024, "house-CA-30", 12.0, chamber="house"),
+        _result(2024, "house-CA-31", 8.0, chamber="house"),
+    ])
+    polls = PollLookup([])
+    lean = StateLean(results)
+    row = build_row("house-CA-30", 2026, "house", "CA", "30", results, polls,
+                    "2026-07-17", holder_party="D", state_lean=lean)
+    assert row.has_prior is False           # stale 2024 prior dropped
+    assert row.detail["redrawn"] is True
+    assert row.x[1] == 0.0                   # prior_margin zeroed
+    assert row.x[3] == 1.0                   # incumbency (holder party) kept
+    assert row.x[5] == 1.0                   # has_state_lean still set
+    assert row.x[4] != 0.0                   # statewide lean retained
+
+
+def test_non_redrawn_state_keeps_prior():
+    # North Carolina is not in the mid-decade remap list: a 2024 House prior
+    # is on the current map and must be retained.
+    results = ResultLookup([_result(2024, "house-NC-01", 4.0, chamber="house")])
+    polls = PollLookup([])
+    row = build_row("house-NC-01", 2026, "house", "NC", "01", results, polls,
+                    "2026-07-17", holder_party="D")
+    assert row.has_prior is True
+    assert row.detail["redrawn"] is False

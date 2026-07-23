@@ -18,7 +18,7 @@ from .model import MarginModel
 from .simulation import simulate_control
 
 CYCLE = 2026
-MODEL_VERSION = "2026.5"
+MODEL_VERSION = "2026.6"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {
@@ -68,11 +68,16 @@ RESEARCH_CLAIMS = [
      "validation": "Compare champion vs baseline-environment-only; midterm-cycle subgroup metrics",
      "decision": "Environment + midterm interaction features", "source": "Project research mandate"},
     {"id": "H-005", "claim": "Recently redrawn districts require greater uncertainty.",
-     "chamber": "house", "metric": "has_prior / lookback restriction",
-     "mechanism": "New boundaries break seat-history comparability",
+     "chamber": "house", "metric": "stale-prior drop + variance inflation",
+     "mechanism": "New boundaries break seat-history comparability; a district's "
+                  "past margin is on lines that no longer exist",
      "status": "Production",
-     "validation": "House prior lookback restricted to post-redistricting cycles; +5pt sigma when no prior",
-     "decision": "Structural: lookback limits + variance inflation", "source": "Project research mandate"},
+     "validation": "app.redistricting records mid-decade remaps (TX, CA for 2026); a "
+                   "district prior predating the current map is dropped so the race "
+                   "falls back to the redistricting-immune state_lean + incumbency, "
+                   "and the seat gets +5pt (no-history) and a further +4pt sigma",
+     "decision": "Structural: event-dated stale-prior drop + variance inflation",
+     "source": "Project research mandate"},
     {"id": "S-001", "claim": "Senate races are more candidate-sensitive than House races.",
      "chamber": "senate", "metric": "chamber-specific residual sigma",
      "mechanism": "Statewide personal brands decouple from partisanship",

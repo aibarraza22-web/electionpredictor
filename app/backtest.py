@@ -25,13 +25,18 @@ MIN_TRAINING_CYCLES = 3
 # on held-out Brier/log loss to justify its complexity; results are stored,
 # never asserted. "polled_only" restricts scoring to races with polls so the
 # comparison is on equal information.
+# Feature indices reference app.features.FEATURE_NAMES:
+# 0 intercept, 1 prior_margin, 2 has_prior, 3 prior_winner, 4 state_lean,
+# 5 has_state_lean, 6 environment, 7 midterm_environment, 8 generic_ballot,
+# 9 has_generic_ballot, 10 poll_average, 11 has_polls.
 BASELINES: dict[str, dict] = {
     "baseline-prior-result": {"features": [0, 1, 2], "polled_only": False},
     "baseline-incumbency-only": {"features": [0, 3], "polled_only": False},
-    "baseline-environment-only": {"features": [0, 4, 5], "polled_only": False},
-    "baseline-uniform-swing": {"features": [0, 1, 2, 4, 5], "polled_only": False},
-    "baseline-generic-ballot": {"features": [0, 1, 2, 6, 7], "polled_only": False},
-    "baseline-polls-only": {"features": [0, 8, 9], "polled_only": True},
+    "baseline-state-lean": {"features": [0, 4, 5], "polled_only": False},
+    "baseline-environment-only": {"features": [0, 6, 7], "polled_only": False},
+    "baseline-uniform-swing": {"features": [0, 1, 2, 6, 7], "polled_only": False},
+    "baseline-generic-ballot": {"features": [0, 1, 2, 8, 9], "polled_only": False},
+    "baseline-polls-only": {"features": [0, 10, 11], "polled_only": True},
 }
 
 # Challenger models: full-feature variants competing with the champion under
@@ -43,6 +48,20 @@ CHALLENGERS: dict[str, dict] = {
     # accuracy on first evaluation (claim N-001) and stays out of the
     # champion until this challenger wins.
     "challenger-generic-ballot": {"use_generic_ballot": True},
+}
+
+# Champion candidates: model specs that compete to be each chamber's
+# production model. The winner is chosen PER CHAMBER by held-out log loss
+# (the Senate, with far fewer training races, tends to prefer stronger
+# regularization than the House) — the mandate calls for different model
+# structures per chamber, and this makes that choice on evidence, not
+# assertion. The generic-ballot spec is excluded here (documented as a
+# rejected feature, claim N-001) but still tracked as a challenger.
+CHAMPION_CANDIDATES: dict[str, dict] = {
+    "base": {},
+    "ridge-strong": {"l2": 8.0},
+    "ridge-light": {"l2": 2.0},
+    "state-effects": {"state_effects": True},
 }
 
 
@@ -212,6 +231,28 @@ def horizon_metrics(results: ResultLookup, poll_lookup: PollLookup,
         out[str(days_before)] = metrics(subset)
     out["population"] = "races polled by election eve; earlier cutoffs may route them to the fundamentals tier"
     return out
+
+
+def select_chamber_champions(results: ResultLookup, poll_lookup: PollLookup,
+                             state_lean=None) -> dict[str, dict]:
+    """Choose each chamber's champion spec by held-out log loss, evaluating
+    CHAMPION_CANDIDATES under the identical walk-forward protocol. Returns
+    ``{chamber: {"name", "kwargs", "scoreboard"}}``."""
+    champions: dict[str, dict] = {}
+    for chamber in ("house", "senate"):
+        rows = historical_rows(results, poll_lookup, chamber, state_lean=state_lean)
+        scoreboard = {}
+        for name, kwargs in CHAMPION_CANDIDATES.items():
+            scored, _ = walk_forward(rows, chamber, model_kwargs=kwargs)
+            if scored:
+                scoreboard[name] = metrics(scored)["log_loss"]
+        if not scoreboard:
+            champions[chamber] = {"name": "base", "kwargs": {}, "scoreboard": {}}
+            continue
+        best = min(scoreboard, key=scoreboard.get)
+        champions[chamber] = {"name": best, "kwargs": CHAMPION_CANDIDATES[best],
+                              "scoreboard": scoreboard}
+    return champions
 
 
 def run_backtests(model_version: str) -> list[dict]:

@@ -27,17 +27,11 @@ from .domain import normal_cdf, quality_grade, rating
 from .features import FEATURE_NAMES, FeatureRow
 
 DEFAULT_L2 = 4.0
-# environment/midterm_environment/generic_ballot take one value per cycle,
-# so their true effective sample size is the number of distinct cycles
-# (~7-14), not the thousands of district-rows that share that value; without
-# extra shrinkage naive row-level ridge overstates precision and can inflate
-# these coefficients well past what that few cycles actually support.
-# Chosen empirically: the smallest multiplier, swept over {1,4,10,25,50,100},
-# that kept walk-forward Brier/accuracy at least as good as multiplier=1
-# while pulling the 2026 House projection back into a plausible range (the
-# unregularized fit produced ~96% Democratic control against an actual
-# current 218R/212D chamber - a clear red flag, not noise).
-CYCLE_LEVEL_L2_MULTIPLIER = 25.0
+# Cycle-level features (environment/midterm_environment/generic_ballot) are
+# pseudo-replicated across a cycle's district rows; their ridge penalty is
+# scaled by the training set's rows-per-cycle so their effective sample size
+# is the number of cycles, not rows. See MarginModel._penalties. (This
+# replaced an earlier hardcoded multiplier with the data-driven factor.)
 MIN_SIGMA = 4.0     # pct points; guards degenerate residual pools
 N_POLL_FEATURES = 2   # poll_average, has_polls sit at the end of the vector
 N_NATIONAL_FEATURES = 2  # generic_ballot, has_generic_ballot sit just before them
@@ -77,7 +71,7 @@ def ridge_fit(xs: list[list[float]], ys: list[float],
     that as 6,000 independent observations and can inflate the coefficient
     far beyond what the small number of true cycle-level data points
     supports; such features get a much larger penalty (see
-    ``CYCLE_LEVEL_L2_MULTIPLIER``)."""
+    the rows-per-cycle factor in MarginModel._penalties)."""
     n_features = len(xs[0])
     penalties = l2 if isinstance(l2, list) else [l2] * n_features
     xtx = [[sum(x[i] * x[j] for x in xs) for j in range(n_features)] for i in range(n_features)]
@@ -138,14 +132,22 @@ class MarginModel:
         polls = [len(FEATURE_NAMES) - 2, len(FEATURE_NAMES) - 1]
         return {"full": base + gb + polls, "fundamentals": base + gb, "core": base}
 
-    def _penalties(self, idx: list[int]) -> list[float]:
-        """Per-feature ridge penalty for a tier's index set: cycle-level
-        features (environment, midterm_environment, generic_ballot) get
-        CYCLE_LEVEL_L2_MULTIPLIER times the base penalty (see ridge_fit)."""
+    def _penalties(self, idx: list[int], cycle_multiplier: float) -> list[float]:
+        """Per-feature ridge penalty for a tier's index set. Cycle-level
+        features (environment, midterm_environment, generic_ballot) take one
+        value per cycle, so thousands of district rows that share that value
+        are not independent evidence for the coefficient — they are
+        pseudo-replicates of ~14 real cycle-level observations. Their penalty
+        is scaled by ``cycle_multiplier`` (the training set's rows-per-cycle,
+        computed in ``fit``) so the effective sample size for these features
+        is the number of cycles, not the number of rows. Without this the
+        national midterm coefficient inflates (a ~+8.7 uniform 2026 swing from
+        an effective n of two R-president midterms); with it the coefficient
+        reflects the real cycle-level evidence."""
         cycle_level = {FEATURE_NAMES.index("environment"),
                        FEATURE_NAMES.index("midterm_environment"),
                        FEATURE_NAMES.index("generic_ballot")}
-        return [self.l2 * CYCLE_LEVEL_L2_MULTIPLIER if i in cycle_level else self.l2
+        return [self.l2 * cycle_multiplier if i in cycle_level else self.l2
                 for i in idx]
 
     def fit(self, rows: list[FeatureRow]) -> "MarginModel":
@@ -155,9 +157,14 @@ class MarginModel:
                 by_chamber.setdefault(row.chamber, []).append(row)
         indices = self._indices()
         for chamber, chamber_rows in by_chamber.items():
+            # Pseudoreplication correction factor: rows per distinct cycle.
+            n_cycles = len({r.cycle for r in chamber_rows}) or 1
+            cycle_mult = max(1.0, len(chamber_rows) / n_cycles)
+            pen = {tier: self._penalties(indices[tier], cycle_mult)
+                   for tier in ("fundamentals", "core", "full")}
             ys = [r.actual_margin for r in chamber_rows]
             fund_xs = [[r.x[i] for i in indices["fundamentals"]] for r in chamber_rows]
-            fund_weights = ridge_fit(fund_xs, ys, self._penalties(indices["fundamentals"]))
+            fund_weights = ridge_fit(fund_xs, ys, pen["fundamentals"])
             fund_residuals = [
                 y - sum(w * v for w, v in zip(fund_weights, x))
                 for x, y in zip(fund_xs, ys)]
@@ -165,7 +172,7 @@ class MarginModel:
             # current cycle has no national polling ingested yet, so the model
             # never extrapolates through a feature absent at prediction time.
             core_xs = [[r.x[i] for i in indices["core"]] for r in chamber_rows]
-            core_weights = ridge_fit(core_xs, ys, self._penalties(indices["core"]))
+            core_weights = ridge_fit(core_xs, ys, pen["core"])
             core_residuals = [
                 y - sum(w * v for w, v in zip(core_weights, x))
                 for x, y in zip(core_xs, ys)]
@@ -174,7 +181,7 @@ class MarginModel:
             if len(polled) >= 3 * len(FEATURE_NAMES):
                 full_xs = [[r.x[i] for i in indices["full"]] for r in polled]
                 full_ys = [r.actual_margin for r in polled]
-                full_weights = ridge_fit(full_xs, full_ys, self._penalties(indices["full"]))
+                full_weights = ridge_fit(full_xs, full_ys, pen["full"])
                 full_residuals = [
                     y - sum(w * v for w, v in zip(full_weights, x))
                     for x, y in zip(full_xs, full_ys)]

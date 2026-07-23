@@ -18,7 +18,7 @@ from .model import MarginModel
 from .simulation import simulate_control
 
 CYCLE = 2026
-MODEL_VERSION = "2026.4"
+MODEL_VERSION = "2026.5"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {
@@ -161,6 +161,55 @@ RESEARCH_CLAIMS = [
                  "in the margin coefficients themselves",
      "source": "This project's own backtests, investigated live in response to a user-observed "
               "implausible 2026 forecast"},
+    {"id": "S-003", "claim": "State partisan lean (clipped mean of a state's House-district "
+                             "margins) is a strong Senate fundamentals baseline and fills the "
+                             "safe-seat gap the stale prior-Senate-margin leaves.",
+     "chamber": "senate", "metric": "state_lean",
+     "mechanism": "A statewide race tracks the state's overall partisan lean; the district "
+                  "mean is a good proxy once uncontested-district blowouts are clipped",
+     "status": "Production",
+     "validation": "Validated against 2024 presidential two-party margins across all 35 "
+                   "states with 2026 Senate races: mean abs error 3.7pts (raw district mean "
+                   "was 7.3, distorted by uncontested seats - e.g. MA read D+84 vs true D+25). "
+                   "Per-district clip at 40pts fixes it. Adding state_lean fixed Idaho and "
+                   "Louisiana (no prior Senate result) collapsing from safe-R to D+3 toss-ups",
+     "decision": "state_lean added to the core feature tier (available to every seat, every "
+                 "cycle); Senate MAE improved 5.2->4.9",
+     "source": "Project research mandate (state presidential lean) + user-flagged Senate issue"},
+    {"id": "M-001", "claim": "The House and Senate should not share one champion spec.",
+     "chamber": "both", "metric": "per-chamber champion selection by held-out log loss",
+     "mechanism": "The Senate has ~14x fewer training races than the House, so it benefits "
+                  "from stronger regularization",
+     "status": "Production",
+     "validation": "select_chamber_champions walk-forwards {base, ridge-strong, ridge-light, "
+                   "state-effects} per chamber. House picks ridge-light (l2=2); Senate picks "
+                   "ridge-strong (l2=8), improving Senate log loss 0.1536->0.1523. Scoreboard "
+                   "stored in meta.chamber_champions",
+     "decision": "Each chamber fits its own champion spec (mandate requirement 6)",
+     "source": "Project research mandate + user request"},
+    {"id": "N-003", "claim": "The 2026 topline is built up from individual seats on CURRENT "
+                             "data; the national midterm swing on top is out-of-sample "
+                             "validated, not an assumption that 2026 equals 2006.",
+     "chamber": "house", "metric": "midterm_environment coefficient + pseudoreplication penalty",
+     "mechanism": "Each seat is predicted from its own 2024 prior margin and state lean (current "
+                  "maps/demographics); the president's party historically loses midterm seats",
+     "status": "Production",
+     "validation": "Decomposition: pure seat fundamentals give a House median of 216 (status "
+                   "quo); the president's-party-midterm effect adds the rest. That effect was "
+                   "confirmed to improve held-out prediction at BOTH the row level and the "
+                   "cycle-level national-swing level (shrinking it to zero worsened cycle mean "
+                   "error 4.6->5.1pts) - so it is earned, not assumed, and forcing the median "
+                   "to the fundamentals-only 216 would override validated data with intuition. "
+                   "BUT the coefficient was pseudo-replicated (6,088 House rows share ~14 "
+                   "cycle values), inflating it; penalising cycle-level features by "
+                   "rows-per-cycle corrects the effective sample size and moved the House "
+                   "median 240->235 (matching the 2018 precedent of 235) at negligible "
+                   "backtest cost",
+     "decision": "Data-driven pseudoreplication penalty in MarginModel._penalties (replaces a "
+                 "hardcoded multiplier). Seat features already use current-cycle data, so map/"
+                 "demographic change IS captured per-seat; the remaining D-lean is the "
+                 "validated midterm effect, expressed with wide intervals (House 80%: ~[210,260])",
+     "source": "This project's backtests, investigated in response to a user methodology note"},
 ]
 
 
@@ -278,18 +327,29 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     races = build_race_universe()
     results = ResultLookup(store.all_results())
     poll_lookup = PollLookup(store.all_polls())
+    from .features import StateLean
+    state_lean = StateLean(results)
 
     training: list = []
     for chamber in ("house", "senate"):
         from .features import historical_rows
         training.extend(historical_rows(results, poll_lookup, chamber,
-                                        cycles=[c for c in results.cycles(chamber) if c < CYCLE]))
+                                        cycles=[c for c in results.cycles(chamber) if c < CYCLE],
+                                        state_lean=state_lean))
     trained_chambers = {row.chamber for row in training}
     if not {"house", "senate"} <= trained_chambers:
         raise RuntimeError(
             "cannot train: no ingested historical results for "
             f"{sorted({'house', 'senate'} - trained_chambers)}; run ingestion first")
-    model = MarginModel().fit(training)
+    # Each chamber picks its own champion spec on held-out log loss (the
+    # mandate calls for different structures per chamber; this decides it on
+    # evidence). Fit one model per chamber on that chamber's training rows.
+    from .backtest import select_chamber_champions
+    champions = select_chamber_champions(results, poll_lookup, state_lean)
+    models: dict[str, MarginModel] = {}
+    for chamber, choice in champions.items():
+        chamber_rows = [r for r in training if r.chamber == chamber]
+        models[chamber] = MarginModel(**choice["kwargs"]).fit(chamber_rows)
 
     version = data_version(store.counts(), prefix)
     snapshots = []
@@ -298,9 +358,9 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     for race in races:
         row = build_row(race["seat_key"], CYCLE, race["chamber"], race["state"],
                         race["district"], results, poll_lookup, as_of,
-                        holder_party=race["incumbent_party"])
+                        holder_party=race["incumbent_party"], state_lean=state_lean)
         feature_rows[race["id"]] = row
-        payload = model.forecast_payload(row, race["id"])
+        payload = models[race["chamber"]].forecast_payload(row, race["id"])
         payload.update({"as_of": as_of, "model_version": MODEL_VERSION,
                         "data_version": version})
         snapshots.append(payload)
@@ -308,12 +368,18 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     inserted = store.insert_forecasts(snapshots)
     _store_alternative_model_snapshots(training, feature_rows, as_of, version)
 
+    champion_desc = "; ".join(f"{ch}: {choice['name']}" for ch, choice in champions.items())
+    store.set_meta("chamber_champions", json.dumps(
+        {ch: {"spec": choice["name"], "kwargs": choice["kwargs"],
+              "log_loss_scoreboard": choice["scoreboard"]}
+         for ch, choice in champions.items()}))
     store.upsert_model_version({
         "id": MODEL_VERSION, "chamber": "both", "status": "champion",
         "created_at": store.now(),
-        "description": "Chamber-specific ridge regression on vintage-safe "
-                       "fundamentals + time-decayed polling averages",
-        "coefficients": model.to_json()})
+        "description": "Per-chamber ridge regression on vintage-safe "
+                       f"fundamentals (state lean, seat history, environment) + "
+                       f"time-decayed polling. Chamber champions -> {champion_desc}",
+        "coefficients": json.dumps({ch: json.loads(m.to_json()) for ch, m in models.items()})})
     store.seed_research_claims(RESEARCH_CLAIMS)
     # Backtests run before the control simulation: they compute the
     # empirical national-shock size (see backtest.national_error_sigma) that

@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
+from . import redistricting
+
 # The president's party during each November election. Facts of record.
 PRESIDENT_PARTY = {
     1998: "D", 2000: "D", 2002: "R", 2004: "R", 2006: "R", 2008: "R",
@@ -200,6 +202,15 @@ def build_row(seat_key: str, cycle: int, chamber: str, state: str,
     gb_avg, gb_count, _ = poll_lookup.average(cycle, GENERIC_BALLOT_SEAT, as_of)
     environment, midterm_environment = environment_signs(cycle)
     lean_value, lean_cycle = (state_lean.lean(state, cycle) if state_lean else (None, None))
+    # A district prior is only a valid baseline if it was run on the same map.
+    # States that redrew their U.S. House lines mid-decade (see redistricting)
+    # have stale district results: drop the prior margin so the race falls back
+    # to the redistricting-immune state_lean plus incumbency, and flag the seat
+    # redrawn so the model widens its uncertainty for it.
+    redrawn = (chamber == "house"
+               and redistricting.prior_is_stale(state, prior_cycle, cycle))
+    if redrawn:
+        prior_margin, prior_cycle = None, None
     has_prior = prior_margin is not None
     has_polls = poll_avg is not None
     has_gb = gb_avg is not None
@@ -229,7 +240,7 @@ def build_row(seat_key: str, cycle: int, chamber: str, state: str,
         district=district, x=x, actual_margin=actual_margin,
         poll_count=poll_count, last_poll_date=last_poll, has_prior=has_prior,
         detail={"prior_cycle": prior_cycle, "as_of": as_of,
-                "state_lean_cycle": lean_cycle})
+                "state_lean_cycle": lean_cycle, "redrawn": redrawn})
 
 
 def historical_rows(results: ResultLookup, poll_lookup: PollLookup, chamber: str,

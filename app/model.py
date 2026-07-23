@@ -228,6 +228,13 @@ class MarginModel:
         sigma = self.sigma[row.chamber][kind]
         if not row.has_prior:
             sigma = sqrt(sigma ** 2 + 25.0)  # no seat history: add 5pt-sd term
+        if row.detail.get("redrawn"):
+            # Mid-decade redraw: the seat lost its district prior above (so it
+            # already carries the no-history term), but even the statewide lean
+            # leaves the new district's specific composition genuinely unknown.
+            # Add a further 4pt-sd term so redrawn seats read as the toss-ups
+            # they are, not as false safe seats (mandate hypothesis H-005).
+            sigma = sqrt(sigma ** 2 + 16.0)
         return Prediction(mean, sigma, kind)
 
     def forecast_payload(self, row: FeatureRow, race_id: str) -> dict:

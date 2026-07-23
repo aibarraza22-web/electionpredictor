@@ -4,6 +4,15 @@ Runs in margin space: each race's forecast margin carries its own sigma
 (recovered from the stored 80% interval), decomposed into a shared national
 shock plus idiosyncratic noise, so race errors stay correlated the way
 polling/fundamentals misses actually are.
+
+The national-shock size drives how much per-seat uncertainty stays
+*correlated* rather than averaging out across hundreds of seats via the law
+of large numbers — get it wrong and a modest, honest per-seat lean can turn
+into false aggregate certainty. It must come from actual data
+(``app.backtest.national_error_sigma``: the standard deviation of
+out-of-sample cycle-level mean prediction error), not a guessed constant.
+``FALLBACK_NATIONAL_SIGMA`` exists only for callers with no backtest history
+available (e.g. unit tests).
 """
 from __future__ import annotations
 
@@ -12,24 +21,25 @@ from math import sqrt
 from random import Random
 from statistics import mean, median
 
-NATIONAL_SIGMA = 3.5  # pct points of shared national margin error
+FALLBACK_NATIONAL_SIGMA = 5.5  # pct points; see module docstring
 Z80 = 1.282
 
 
 def simulate_control(forecasts: list[dict], chamber: str, simulations: int = 25000,
                      seed: int = 2026, base_dem_seats: int = 0,
-                     tie_break_party: str = "democratic") -> dict:
+                     tie_break_party: str = "democratic",
+                     national_sigma: float = FALLBACK_NATIONAL_SIGMA) -> dict:
     rng = Random(seed)
     threshold = 218 if chamber == "house" else 51
     races = []
     for f in forecasts:
         sigma = max((f["high80"] - f["low80"]) / (2 * Z80), 1.0)
-        idio = sqrt(max(sigma ** 2 - NATIONAL_SIGMA ** 2, 1.0))
+        idio = sqrt(max(sigma ** 2 - national_sigma ** 2, 1.0))
         races.append((f["race_id"], f["margin"], idio))
     counts = []
     decisive: Counter = Counter()
     for _ in range(simulations):
-        national = rng.gauss(0, NATIONAL_SIGMA)
+        national = rng.gauss(0, national_sigma)
         seats = base_dem_seats
         last_winner = None
         for race_id, margin, idio in races:
@@ -60,5 +70,5 @@ def simulate_control(forecasts: list[dict], chamber: str, simulations: int = 250
         "distribution": {str(k): v for k, v in sorted(distribution.items())},
         "tipping_point": decisive.most_common(1)[0][0] if decisive else None,
         "tie_break_assumption": tie_break_party,
-        "national_error_sigma_pts": NATIONAL_SIGMA,
+        "national_error_sigma_pts": round(national_sigma, 2),
     }

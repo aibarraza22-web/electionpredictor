@@ -11,25 +11,26 @@ full-coverage historical results source; without it the model only sees
 seat history for districts that happened to be polled (the FiveThirtyEight
 adapter's coverage), which is most House districts.
 
-The House file is guestbook-gated: Dataverse returns 400 with
-``"You may not download this file without the required Guestbook
-response"`` for anonymous/unauthenticated requests, no matter the query
-parameters. There is no anonymous bypass — a real person must satisfy the
-guestbook once, then requests authenticated as that person work going
-forward. Set up once (~5 minutes):
+The House file is guestbook-gated: Dataverse returns 400 with "You may not
+download this file without the required Guestbook response" for
+unauthenticated requests, and — confirmed empirically — a ``DATAVERSE_API_KEY``
+authenticated request alone was not sufficient to satisfy it either, even
+from an account that had already agreed to the guestbook via the web UI.
+Rather than depend on a fragile, unverified authentication path for data
+that barely changes (results are final once certified; there's no reason to
+re-fetch daily), this adapter ships a **bundled vintage snapshot**:
+``data/vintage/medsl_us_house_1976_2024.tab``, downloaded through the
+Dataverse web UI after satisfying the guestbook (see DATA_SOURCES.md for
+provenance), used directly rather than fetched live. It is the primary and
+default path for House results.
 
-1. Create a free account at https://dataverse.harvard.edu (top-right "Log In",
-   sign up or use an existing Google/GitHub/ORCID login).
-2. Visit the House dataset: https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/IG0UN2
-   and click to access/download the House returns file. Filling in the
-   guestbook form (name/email/institution/purpose) once satisfies it for
-   that account permanently.
-3. Generate an API token: account menu (top-right) → API Token → Create Token.
-4. Set it as the ``DATAVERSE_API_KEY`` secret/environment variable.
+``DATAVERSE_API_KEY`` (see ``_auth_headers``) remains supported as a live
+fallback/refresh mechanism, used automatically when the bundled snapshot is
+absent (e.g. a checkout that stripped ``data/vintage``); it may or may not
+work depending on Dataverse's guestbook semantics, so it is not relied on.
 
-Without that token this adapter still successfully pulls the (ungated)
-Senate file; the House file is skipped with a clear, honest failure message
-rather than a crash.
+The Senate file (``doi:10.7910/DVN/PEJ5QU``) is not guestbook-gated and is
+always fetched live.
 """
 from __future__ import annotations
 
@@ -38,6 +39,7 @@ import io
 import json
 import os
 from collections import defaultdict
+from pathlib import Path
 
 import httpx
 
@@ -54,6 +56,9 @@ SOURCE = "medsl-constituency-returns"
 
 DEM_PARTIES = {"DEMOCRAT", "DEMOCRATIC-FARMER-LABOR", "DEMOCRATIC-NPL"}
 REP_PARTIES = {"REPUBLICAN"}
+
+BUNDLED_HOUSE_FILE = Path(__file__).resolve().parents[2] / "data" / "vintage" / "medsl_us_house_1976_2024.tab"
+BUNDLED_HOUSE_PROVENANCE_URL = f"{DATAVERSE}/dataset.xhtml?persistentId={DATASETS['house']}"
 
 
 def _auth_headers() -> dict | None:
@@ -145,15 +150,43 @@ def parse(payload: bytes, chamber: str) -> list[dict]:
     return rows
 
 
+def _ingest_bundled_house() -> dict:
+    payload = BUNDLED_HOUSE_FILE.read_bytes()
+    rows = parse(payload, "house")
+    inserted = store.insert_rows("election_results", rows)
+    store.record_source(
+        SOURCE, BUNDLED_HOUSE_PROVENANCE_URL, LICENSE, available_at=store.now(),
+        sha256=sha256(payload), record_count=inserted,
+        note=(f"house: bundled vintage snapshot ({BUNDLED_HOUSE_FILE.name}), "
+              f"{len(rows)} seat-cycle margins, 1976-2024. Guestbook-gated at "
+              "Dataverse; a maintainer satisfied it via the web UI and downloaded "
+              "this file directly (see DATA_SOURCES.md for full provenance). "
+              "Refresh by re-downloading after a new cycle is certified."))
+    return {"results": inserted, "files": [BUNDLED_HOUSE_FILE.name], "failed_files": []}
+
+
 def ingest(chambers: tuple[str, ...] = ("house", "senate")) -> dict:
     summary: dict = {"source": SOURCE, "results": 0, "files": [], "failed_files": []}
     for chamber in chambers:
-        for label, file_id in _dataset_file_urls(DATASETS[chamber]):
+        if chamber == "house" and BUNDLED_HOUSE_FILE.exists():
+            bundled = _ingest_bundled_house()
+            summary["results"] += bundled["results"]
+            summary["files"] += bundled["files"]
+            continue
+        try:
+            file_urls = _dataset_file_urls(DATASETS[chamber])
+        except httpx.HTTPError as exc:
+            # A dataset-listing failure (network error, rate limit, transient
+            # 403, ...) must not discard results already collected for other
+            # chambers.
+            summary["failed_files"].append(f"{chamber}: dataset listing: {exc}")
+            continue
+        for label, file_id in file_urls:
             try:
                 payload = _fetch_datafile(file_id)
-            except httpx.HTTPStatusError as exc:
-                # One unreadable file (e.g. a codebook or an unusual format)
-                # must not block every other file in the dataset.
+            except httpx.HTTPError as exc:
+                # One unreadable file (e.g. a codebook, an unusual format, or
+                # a network error) must not block every other file.
                 summary["failed_files"].append(f"{chamber}: {label}: {exc}")
                 continue
             rows = parse(payload, chamber)

@@ -191,6 +191,39 @@ RESEARCH_CLAIMS = [
      "decision": "state_lean added to the core feature tier (available to every seat, every "
                  "cycle); Senate MAE improved 5.2->4.9",
      "source": "Project research mandate (state presidential lean) + user-flagged Senate issue"},
+    {"id": "S-004", "claim": "ROOT CAUSE of bad Senate margins/tipping-point/ratings: the "
+                             "Senate had no real training data. Bundle real MEDSL Senate returns.",
+     "chamber": "senate", "metric": "election_results (senate) row count and provenance",
+     "mechanism": "Harvard Dataverse egress is blocked from the build environment and the "
+                  "Senate file is guestbook-gated, so the 'live fetch' silently produced zero "
+                  "rows; the Senate model then fell back to synthetic/stale forecasts",
+     "status": "Production",
+     "validation": "Bundled data/vintage/medsl_us_senate_2004_2024.csv: real statewide returns, "
+                   "2004-2020 (Dataverse MEDSL) + 2024 (MEDSL open GitHub repo), 344 seat-cycle "
+                   "margins across 10 cycles, spot-checked vs known results (2018 TX D-2.6, 2014 "
+                   "NC D-1.6, 2012 MA D+7.6). With real data the Senate forecast is driven by "
+                   "actual history + state_lean instead of noise, and the tipping point resolves "
+                   "to a genuine battleground (GA).",
+     "decision": "Ship the bundled Senate snapshot as the default source (mirrors the House "
+                 "bundle); DATA_SOURCES.md corrected (the old 'fetched live, no gating' note "
+                 "was false for the deploy environment)",
+     "source": "User-reported Senate margins/tipping-point/ratings issues"},
+    {"id": "S-005", "claim": "The Senate's few July toss-ups are the honest state of a no-poll "
+                             "fundamentals forecast, not an over-polarization bug.",
+     "chamber": "senate", "metric": "walk-forward log loss with/without prior_winner",
+     "mechanism": "prior_winner adds a flat incumbency signal; it looks like it over-polarizes "
+                  "competitive seats (NC/GA, decided by ~1.8pts in 2020, read ~D-9)",
+     "status": "Validated",
+     "validation": "Tested the fix: dropping or shrinking prior_winner makes competitive races "
+                   "look competitive (NC/GA -> ~toss-up, +7 toss-ups) BUT worsens walk-forward "
+                   "log loss in BOTH chambers (house 0.262->0.275, senate 0.367->0.400) and "
+                   "winner accuracy - so incumbency genuinely predicts and the confidence is "
+                   "earned. Making competitive races 'look' like toss-ups by shrinking it would "
+                   "be fitting intuition, not data. Real toss-ups will emerge once 2026 Senate "
+                   "polls are ingested (polls pull competitive races toward their true closeness).",
+     "decision": "Keep prior_winner as-is; do not distort means to manufacture toss-ups. The "
+                 "fix for Senate realism was real DATA (S-004) plus polls, not model tuning.",
+     "source": "User-reported 'no toss-ups' + investigation"},
     {"id": "M-001", "claim": "The House and Senate should not share one champion spec.",
      "chamber": "both", "metric": "per-chamber champion selection by held-out log loss",
      "mechanism": "The Senate has ~14x fewer training races than the House, so it benefits "

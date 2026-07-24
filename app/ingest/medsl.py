@@ -57,8 +57,18 @@ SOURCE = "medsl-constituency-returns"
 DEM_PARTIES = {"DEMOCRAT", "DEMOCRATIC-FARMER-LABOR", "DEMOCRATIC-NPL"}
 REP_PARTIES = {"REPUBLICAN"}
 
-BUNDLED_HOUSE_FILE = Path(__file__).resolve().parents[2] / "data" / "vintage" / "medsl_us_house_1976_2024.tab"
+_VINTAGE = Path(__file__).resolve().parents[2] / "data" / "vintage"
+BUNDLED_HOUSE_FILE = _VINTAGE / "medsl_us_house_1976_2024.tab"
+# Real MEDSL statewide U.S. Senate returns, 2004-2020 (Harvard Dataverse
+# doi:10.7910/DVN/PEJ5QU, the same dataset the Dataverse listing points to)
+# plus the 2024 cycle from MEDSL's open 2024-elections-official GitHub repo.
+# Bundled because Dataverse egress is blocked from the build environment and
+# the Dataverse file is guestbook-gated; the returns are certified facts that
+# do not change. See DATA_SOURCES.md for provenance.
+BUNDLED_SENATE_FILE = _VINTAGE / "medsl_us_senate_2004_2024.csv"
 BUNDLED_HOUSE_PROVENANCE_URL = f"{DATAVERSE}/dataset.xhtml?persistentId={DATASETS['house']}"
+BUNDLED_SENATE_PROVENANCE_URL = f"{DATAVERSE}/dataset.xhtml?persistentId={DATASETS['senate']}"
+BUNDLED_FILES = {"house": BUNDLED_HOUSE_FILE, "senate": BUNDLED_SENATE_FILE}
 
 
 def _auth_headers() -> dict | None:
@@ -150,26 +160,37 @@ def parse(payload: bytes, chamber: str) -> list[dict]:
     return rows
 
 
-def _ingest_bundled_house() -> dict:
-    payload = BUNDLED_HOUSE_FILE.read_bytes()
-    rows = parse(payload, "house")
-    inserted = store.insert_rows("election_results", rows)
-    store.record_source(
-        SOURCE, BUNDLED_HOUSE_PROVENANCE_URL, LICENSE, available_at=store.now(),
-        sha256=sha256(payload), record_count=inserted,
-        note=(f"house: bundled vintage snapshot ({BUNDLED_HOUSE_FILE.name}), "
-              f"{len(rows)} seat-cycle margins, 1976-2024. Guestbook-gated at "
+_BUNDLED_NOTE = {
+    "house": ("house: bundled vintage snapshot, 1976-2024. Guestbook-gated at "
               "Dataverse; a maintainer satisfied it via the web UI and downloaded "
-              "this file directly (see DATA_SOURCES.md for full provenance). "
-              "Refresh by re-downloading after a new cycle is certified."))
-    return {"results": inserted, "files": [BUNDLED_HOUSE_FILE.name], "failed_files": []}
+              "this file directly."),
+    "senate": ("senate: bundled statewide returns, 2004-2020 (Dataverse MEDSL "
+               "senate) + 2024 (MEDSL 2024-elections-official GitHub). Dataverse "
+               "egress is blocked from the build environment and the file is "
+               "guestbook-gated; these are certified, unchanging returns."),
+}
+
+
+def _ingest_bundled(chamber: str) -> dict:
+    path = BUNDLED_FILES[chamber]
+    payload = path.read_bytes()
+    rows = parse(payload, chamber)
+    inserted = store.insert_rows("election_results", rows)
+    provenance = (BUNDLED_HOUSE_PROVENANCE_URL if chamber == "house"
+                  else BUNDLED_SENATE_PROVENANCE_URL)
+    store.record_source(
+        SOURCE, provenance, LICENSE, available_at=store.now(),
+        sha256=sha256(payload), record_count=inserted,
+        note=(f"{_BUNDLED_NOTE[chamber]} ({path.name}), {len(rows)} seat-cycle "
+              "margins. See DATA_SOURCES.md for full provenance."))
+    return {"results": inserted, "files": [path.name], "failed_files": []}
 
 
 def ingest(chambers: tuple[str, ...] = ("house", "senate")) -> dict:
     summary: dict = {"source": SOURCE, "results": 0, "files": [], "failed_files": []}
     for chamber in chambers:
-        if chamber == "house" and BUNDLED_HOUSE_FILE.exists():
-            bundled = _ingest_bundled_house()
+        if BUNDLED_FILES.get(chamber) and BUNDLED_FILES[chamber].exists():
+            bundled = _ingest_bundled(chamber)
             summary["results"] += bundled["results"]
             summary["files"] += bundled["files"]
             continue

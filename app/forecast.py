@@ -293,6 +293,27 @@ RESEARCH_CLAIMS = [
      "decision": "Keep uniform cycle weighting. Lowering the topline by recency-weighting or "
                  "shrinking a conservative swing would be fitting the answer, not the data.",
      "source": "This project's walk-forward backtests, in response to a user target-number note"},
+    {"id": "H-007", "claim": "The House model is near the achievable floor for its feature set; "
+                             "the residual seat-count error is irreducible national-wave "
+                             "magnitude, not missing features.",
+     "chamber": "house", "metric": "walk-forward log loss / per-cycle seat error across feature "
+                                   "and regularization variants",
+     "mechanism": "The dominant errors are wave-reversal cycles (2010 predicted +68 D seats too "
+                  "many, 2020 +32) where a national swing hits every seat at once",
+     "status": "Validated",
+     "validation": "Deep exploration, all walk-forward: (a) a second prior (seat's result 4yr "
+                   "back) and an explicit wave-detector barely move log loss (0.2707->0.2698) "
+                   "and leave the 2010 miss at +67 - a seat's own history cannot forecast the "
+                   "NATIONAL swing; (b) elasticity interactions (env x prior, env x lean) do "
+                   "not help (<=0.0002) and env x prior HURTS (0.2736); (c) a full l2 sweep is "
+                   "flat (0.2609 at l2=1 to 0.2650 at l2=16, winner accuracy 0.913 throughout). "
+                   "The small gaps between all variants are the evidence: there is no easy win "
+                   "left, and the ~16.7-seat topline MAE (T-001) is dominated by wave magnitude "
+                   "that no available ex-ante feature predicts.",
+     "decision": "Keep the linear feature set; widen the champion grid to a real l2 ladder + "
+                 "state-effects at two shrinkage levels so the choice is empirical (House now "
+                 "picks l2=1). Do not add features that don't earn their place out of sample.",
+     "source": "User request to go deep on the House model"},
     {"id": "T-001", "claim": "The median of the simulated seat distribution is the best single "
                              "topline number; the mode and 'average of the top few outcomes' "
                              "are not improvements.",

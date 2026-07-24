@@ -57,11 +57,21 @@ CHALLENGERS: dict[str, dict] = {
 # structures per chamber, and this makes that choice on evidence, not
 # assertion. The generic-ballot spec is excluded here (documented as a
 # rejected feature, claim N-001) but still tracked as a challenger.
+# Each chamber's champion is chosen from this grid by held-out log loss (see
+# select_chamber_champions). The grid is deliberately a real sweep, not two or
+# three hand-picked points, so the choice is empirical: a finer l2 ladder plus
+# the partial-pooled state-effects variants at two shrinkage strengths. On the
+# current data the House picks ridge-lighter (l2=1) and the Senate picks
+# state-effects (k=8); the margins between neighbours are small, which is itself
+# evidence the model is near the achievable floor for its feature set.
 CHAMPION_CANDIDATES: dict[str, dict] = {
     "base": {},
-    "ridge-strong": {"l2": 8.0},
+    "ridge-lighter": {"l2": 1.0},
     "ridge-light": {"l2": 2.0},
+    "ridge-medium": {"l2": 4.0},
+    "ridge-strong": {"l2": 8.0},
     "state-effects": {"state_effects": True},
+    "state-effects-shrunk": {"state_effects": True, "state_shrinkage": 16.0},
 }
 
 

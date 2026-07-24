@@ -1,7 +1,8 @@
 from random import Random
 
-from app.backtest import metrics, walk_forward
-from app.features import FeatureRow
+from app.backtest import (CHAMPION_CANDIDATES, metrics,
+                          select_chamber_champions, walk_forward)
+from app.features import FeatureRow, PollLookup, ResultLookup, StateLean
 
 
 def _rows(cycles, per_cycle=40, seed=1):
@@ -37,6 +38,34 @@ def test_walk_forward_produces_reasonable_skill():
     assert summary["n_races"] == 180  # cycles 2018/2020/2022 held out in turn
     assert summary["winner_accuracy"] > 0.8
     assert 0 < summary["brier"] < 0.25
+
+
+def _result(cycle, seat_key, margin, state, chamber="house"):
+    return {"cycle": cycle, "chamber": chamber, "state": state, "district": None,
+            "seat_key": seat_key, "dem_margin": margin,
+            "source": "medsl-constituency-returns"}
+
+
+def test_champion_selection_sweeps_a_real_grid_and_picks_valid_spec():
+    # The champion is chosen empirically from a grid, not hard-coded. Build a
+    # multi-cycle synthetic universe and confirm select_chamber_champions
+    # evaluates the full grid and returns one of its members per chamber.
+    rng = Random(3)
+    rows = []
+    for cycle in range(2008, 2026, 2):
+        for i in range(30):
+            for ch, pre in (("house", "house"), ("senate", "senate")):
+                m = rng.uniform(-25, 25)
+                rows.append(_result(cycle, f"{pre}-S{i:02d}", m, f"S{i:02d}", ch))
+    results = ResultLookup(rows)
+    champs = select_chamber_champions(results, PollLookup([]), StateLean(results))
+    for chamber in ("house", "senate"):
+        assert champs[chamber]["name"] in CHAMPION_CANDIDATES
+        # every grid member that produced predictions is scored
+        assert len(champs[chamber]["scoreboard"]) >= len(CHAMPION_CANDIDATES) - 1
+        best = champs[chamber]["name"]
+        board = champs[chamber]["scoreboard"]
+        assert board[best] == min(board.values())  # picked the lowest log loss
 
 
 def test_metrics_hand_check():

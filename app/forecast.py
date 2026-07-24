@@ -18,7 +18,13 @@ from .model import MarginModel
 from .simulation import simulate_control
 
 CYCLE = 2026
-MODEL_VERSION = "2026.9"
+# 2026.10: first version trained on REAL Senate returns (data/vintage/
+# medsl_us_senate_2004_2024.csv) instead of the synthetic fallback, and with
+# the widened empirical champion grid (House -> l2=1). Bumped because forecast
+# snapshots are immutable per (race_id, as_of, model_version): without a new
+# version, a same-day rerun keeps the numbers frozen from the day's first run,
+# so the real-Senate-data change would not surface until the version changed.
+MODEL_VERSION = "2026.10"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {

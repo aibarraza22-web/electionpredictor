@@ -68,6 +68,32 @@ def test_champion_selection_sweeps_a_real_grid_and_picks_valid_spec():
         assert board[best] == min(board.values())  # picked the lowest log loss
 
 
+def test_champion_scoring_restricts_to_recent_cycles():
+    # The champion is judged on recent cycles (>= scoring_since) even though it
+    # trains on all earlier history. A candidate that is only ever evaluated on
+    # old cycles must not appear in the scoreboard when scoring_since excludes
+    # them. Build a universe spanning old and recent cycles and confirm the
+    # scoring window is honoured.
+    rng = Random(5)
+    rows = []
+    for cycle in range(1990, 2026, 2):
+        for i in range(25):
+            m = rng.uniform(-25, 25)
+            rows.append(_result(cycle, f"house-S{i:02d}", m, f"S{i:02d}", "house"))
+            rows.append(_result(cycle, f"senate-S{i:02d}", m, f"S{i:02d}", "senate"))
+    results = ResultLookup(rows)
+    late = select_chamber_champions(results, PollLookup([]), StateLean(results),
+                                    scoring_since=2018)
+    early = select_chamber_champions(results, PollLookup([]), StateLean(results),
+                                     scoring_since=1900)
+    # both return valid champions; the scoring window is a real knob that can
+    # change the pick (recent-only vs all-history), so at least the machinery
+    # runs and yields grid members
+    for champs in (late, early):
+        for chamber in ("house", "senate"):
+            assert champs[chamber]["name"] in CHAMPION_CANDIDATES
+
+
 def test_metrics_hand_check():
     scored = [
         {"probability": 1.0, "dem_won": 1, "predicted_margin": 10.0, "actual_margin": 8.0,

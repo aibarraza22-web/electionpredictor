@@ -24,14 +24,16 @@ missing values — absent inputs are flagged and widen uncertainty instead.
     environment (the outbound proxy denies `dataverse.harvard.edu`), and the
     Dataverse file is guestbook-gated, so the live fetch cannot run there. The
     adapter ships a **bundled snapshot**,
-    `data/vintage/medsl_us_senate_2004_2024.csv` — real statewide two-party
-    returns for 2004–2020 (the MEDSL Senate dataset, doi:10.7910/DVN/PEJ5QU)
+    `data/vintage/medsl_us_senate_1976_2024.csv` — real statewide two-party
+    returns for 1976–2020 (the MEDSL Senate dataset, doi:10.7910/DVN/PEJ5QU)
     plus 2024 from MEDSL's open `2024-elections-official` GitHub repo. These
     are certified, unchanging results; spot-checked against known margins
-    (2018 TX D−2.6, 2014 NC D−1.6, 2012 MA D+7.6). Without this, the Senate
-    model had **no real training data** and fell back to synthetic/stale
-    forecasts. **Refresh**: after a new Senate cycle is certified, append it
-    from the MEDSL cycle repo (e.g. `MEDSL/2026-elections-official`).
+    (2018 TX D−2.6, 2014 NC D−1.6, 2012 MA D+7.6, 2002 MN D−1.7). Without
+    this, the Senate model had **no real training data** and fell back to
+    synthetic/stale forecasts. Using the full 1976–2002 history (vs a 2004+
+    subset) raises Senate winner accuracy 0.872 → 0.893 on an identical
+    2010–2024 walk-forward. **Refresh**: after a new Senate cycle is certified,
+    append it from the MEDSL cycle repo (e.g. `MEDSL/2026-elections-official`).
   * **House**: this file is guestbook-gated by Dataverse — even an
     authenticated `DATAVERSE_API_KEY` request was confirmed insufficient to
     satisfy it programmatically. Rather than depend on that fragile path for

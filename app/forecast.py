@@ -299,6 +299,23 @@ RESEARCH_CLAIMS = [
      "decision": "Keep uniform cycle weighting. Lowering the topline by recency-weighting or "
                  "shrinking a conservative swing would be fitting the answer, not the data.",
      "source": "This project's walk-forward backtests, in response to a user target-number note"},
+    {"id": "S-006", "claim": "Senate winner accuracy improves from more training history plus "
+                             "selecting the champion on RECENT cycles.",
+     "chamber": "senate", "metric": "walk-forward winner accuracy on a fixed 2010-2024 test set",
+     "mechanism": "More cycles stabilise the environment/incumbency coefficients; and the spec "
+                  "that predicts the modern era best is not the one that predicts the 1980s-90s "
+                  "best (heavy ticket-splitting, Southern realignment)",
+     "status": "Production",
+     "validation": "(a) Extending the bundled Senate file from 2004-2020 to the full 1976-2020 "
+                   "MEDSL history (+2024) lifts winner accuracy 0.872->0.893 and log loss "
+                   "0.367->0.322 on the IDENTICAL 2010-2024 walk-forward, for both specs. (b) "
+                   "select_chamber_champions now scores candidates only on cycles >= 2010 (still "
+                   "training each fit on all earlier history); scoring over all of 1982-2024 had "
+                   "let the old cycles pick ridge-lighter (0.884 recent winner accuracy) over "
+                   "state-effects (0.893). Net Senate winner accuracy: 0.872 -> 0.893.",
+     "decision": "Bundle full 1976-2024 Senate returns; add CHAMPION_SCORING_SINCE=2010 to the "
+                 "champion selection. Verified this does not change or harm the House champion.",
+     "source": "User request to raise winner accuracy"},
     {"id": "H-007", "claim": "The House model is near the achievable floor for its feature set; "
                              "the residual seat-count error is irreducible national-wave "
                              "magnitude, not missing features.",

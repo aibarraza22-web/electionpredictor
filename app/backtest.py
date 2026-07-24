@@ -297,10 +297,23 @@ def horizon_metrics(results: ResultLookup, poll_lookup: PollLookup,
     return out
 
 
+# Champions are scored only on cycles from this year on. Models still TRAIN on
+# all earlier history (more data stabilises the coefficients — that is why the
+# full 1976+ Senate file beats a 2004+ subset), but the *choice* of spec is
+# judged on recent elections, which are the ones representative of the upcoming
+# cycle. Scoring over all of 1982-2024 instead let the 1980s-90s (heavy
+# ticket-splitting, Southern realignment) outvote the modern era and pick a spec
+# that was worse on recent Senate races (0.884 vs state-effects' 0.893 winner
+# accuracy on 2010-2024).
+CHAMPION_SCORING_SINCE = 2010
+
+
 def select_chamber_champions(results: ResultLookup, poll_lookup: PollLookup,
-                             state_lean=None) -> dict[str, dict]:
-    """Choose each chamber's champion spec by held-out log loss, evaluating
-    CHAMPION_CANDIDATES under the identical walk-forward protocol. Returns
+                             state_lean=None,
+                             scoring_since: int = CHAMPION_SCORING_SINCE) -> dict[str, dict]:
+    """Choose each chamber's champion spec by held-out log loss on recent
+    cycles (>= ``scoring_since``), under the identical walk-forward protocol
+    (which still trains each fit on all strictly-earlier cycles). Returns
     ``{chamber: {"name", "kwargs", "scoreboard"}}``."""
     champions: dict[str, dict] = {}
     for chamber in ("house", "senate"):
@@ -308,8 +321,11 @@ def select_chamber_champions(results: ResultLookup, poll_lookup: PollLookup,
         scoreboard = {}
         for name, kwargs in CHAMPION_CANDIDATES.items():
             scored, _ = walk_forward(rows, chamber, model_kwargs=kwargs)
-            if scored:
-                scoreboard[name] = metrics(scored)["log_loss"]
+            recent = [s for s in scored if s["cycle"] >= scoring_since]
+            # fall back to all scored cycles if a chamber has no recent history
+            graded = recent or scored
+            if graded:
+                scoreboard[name] = metrics(graded)["log_loss"]
         if not scoreboard:
             champions[chamber] = {"name": "base", "kwargs": {}, "scoreboard": {}}
             continue

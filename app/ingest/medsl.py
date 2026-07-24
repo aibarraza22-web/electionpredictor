@@ -59,15 +59,18 @@ REP_PARTIES = {"REPUBLICAN"}
 
 _VINTAGE = Path(__file__).resolve().parents[2] / "data" / "vintage"
 BUNDLED_HOUSE_FILE = _VINTAGE / "medsl_us_house_1976_2024.tab"
-# Real statewide U.S. Senate two-party returns, 1976-2020 (the MEDSL Senate
-# dataset, Harvard Dataverse doi:10.7910/DVN/PEJ5QU) plus the 2024 cycle from
-# MEDSL's open 2024-elections-official GitHub repo. Bundled because Dataverse
-# egress is blocked from the build environment and the Dataverse file is
-# guestbook-gated; the returns are certified facts that do not change. The full
-# 1976-2002 history (vs a 2004+ subset) measurably improves Senate winner
-# accuracy (0.872 -> 0.893 on an identical 2010-2024 walk-forward test), by
-# stabilising the environment/incumbency coefficients. See DATA_SOURCES.md.
-BUNDLED_SENATE_FILE = _VINTAGE / "medsl_us_senate_1976_2024.csv"
+# Real statewide U.S. Senate two-party returns, 1976-2024 -- the official
+# MEDSL Senate dataset (Harvard Dataverse doi:10.7910/DVN/PEJ5QU),
+# downloaded directly: this file (unlike the House dataset) does not require
+# a guestbook response. Bundled anyway rather than live-fetched every run, so
+# the pipeline isn't coupled to Dataverse's uptime/policy for a result set
+# that is certified and does not change. Verified against known results
+# (2018 TX D-2.6, 2014 NC D-1.6, 2012 MA D+7.6, 2002 MN D-1.7, 2024 AZ
+# D+2.5). The full 1976-2002 history (vs a 2004+ subset) measurably improves
+# Senate winner accuracy (0.872 -> 0.893 on an identical 2010-2024
+# walk-forward test), by stabilising the environment/incumbency
+# coefficients. See DATA_SOURCES.md.
+BUNDLED_SENATE_FILE = _VINTAGE / "medsl_us_senate_1976_2024.tab"
 BUNDLED_HOUSE_PROVENANCE_URL = f"{DATAVERSE}/dataset.xhtml?persistentId={DATASETS['house']}"
 BUNDLED_SENATE_PROVENANCE_URL = f"{DATAVERSE}/dataset.xhtml?persistentId={DATASETS['senate']}"
 BUNDLED_FILES = {"house": BUNDLED_HOUSE_FILE, "senate": BUNDLED_SENATE_FILE}

@@ -38,17 +38,29 @@ def simulate_control(forecasts: list[dict], chamber: str, simulations: int = 250
         races.append((f["race_id"], f["margin"], idio))
     counts = []
     decisive: Counter = Counter()
+    # The tipping-point seat is the one at the majority-making rank: order every
+    # seat from most- to least-Democratic and the seat sitting at the control
+    # threshold is the pivot — whoever wins it wins the chamber, given every
+    # safer seat breaks their way. The safe not-up Democratic seats
+    # (base_dem_seats) occupy the top ranks, so among the *contested* seats,
+    # sorted most-Democratic first, the pivot is at this 0-based index. (The old
+    # code instead recorded whichever race came last in list order among a
+    # simulation's Democratic wins — an artifact of iteration order, not a
+    # pivotal seat; it was especially wrong for the Senate's short race list.)
+    pivot_index = threshold - base_dem_seats - 1
     for _ in range(simulations):
         national = rng.gauss(0, national_sigma)
         seats = base_dem_seats
-        last_winner = None
+        realized = []
         for race_id, margin, idio in races:
-            if margin + national + rng.gauss(0, idio) > 0:
+            m = margin + national + rng.gauss(0, idio)
+            realized.append((m, race_id))
+            if m > 0:
                 seats += 1
-                last_winner = race_id
         counts.append(seats)
-        if last_winner:
-            decisive[last_winner] += 1
+        if 0 <= pivot_index < len(realized):
+            realized.sort(reverse=True)  # by realized margin, most-D first
+            decisive[realized[pivot_index][1]] += 1
     distribution = Counter(counts)
     sorted_counts = sorted(counts)
     dem_control = sum(

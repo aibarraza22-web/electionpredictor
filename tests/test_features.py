@@ -1,4 +1,5 @@
-from app.features import PollLookup, ResultLookup, StateLean, build_row, environment_signs
+from app.features import (PollLookup, RedrawAdjust, ResultLookup, StateLean,
+                          build_row, environment_signs)
 
 
 def _result(cycle, seat_key, margin, chamber="senate", source="fivethirtyeight-raw-polls"):
@@ -59,10 +60,13 @@ def test_holder_party_fallback_when_no_prior():
     assert row_r.x[3] == -1.0
 
 
-def test_redrawn_district_drops_stale_prior_but_keeps_state_lean():
+def test_redrawn_district_keeps_stale_prior_but_flags_redrawn():
     # A CA district (mid-decade remap for 2026): its 2024 result is on lines
-    # that no longer exist, so the district prior must be dropped, while the
-    # statewide lean (which redistricting cannot change) is retained.
+    # that no longer exist, but walk-forward testing against the 2022
+    # post-census cycle showed dropping such priors *hurts* accuracy (48.5%
+    # vs 90.1%) -- most of a district's population persists through a
+    # redraw, so the stale prior stays the point-estimate input. The seat is
+    # still flagged `redrawn` so model.py widens its uncertainty.
     results = ResultLookup([
         _result(2024, "house-CA-30", 12.0, chamber="house"),
         _result(2024, "house-CA-31", 8.0, chamber="house"),
@@ -71,12 +75,12 @@ def test_redrawn_district_drops_stale_prior_but_keeps_state_lean():
     lean = StateLean(results)
     row = build_row("house-CA-30", 2026, "house", "CA", "30", results, polls,
                     "2026-07-17", holder_party="D", state_lean=lean)
-    assert row.has_prior is False           # stale 2024 prior dropped
-    assert row.detail["redrawn"] is True
-    assert row.x[1] == 0.0                   # prior_margin zeroed
-    assert row.x[3] == 1.0                   # incumbency (holder party) kept
-    assert row.x[5] == 1.0                   # has_state_lean still set
-    assert row.x[4] != 0.0                   # statewide lean retained
+    assert row.has_prior is True             # stale 2024 prior kept
+    assert row.detail["redrawn"] is True      # but flagged for wider sigma
+    assert row.x[1] == 12.0                   # prior_margin retained as-is
+    assert row.x[3] == 1.0                    # prior_winner from the real prior
+    assert row.x[5] == 1.0                    # has_state_lean still set
+    assert row.x[4] != 0.0                    # statewide lean also available
 
 
 def test_non_redrawn_state_keeps_prior():
@@ -87,4 +91,46 @@ def test_non_redrawn_state_keeps_prior():
     row = build_row("house-PA-01", 2026, "house", "PA", "01", results, polls,
                     "2026-07-17", holder_party="D")
     assert row.has_prior is True
-    assert row.detail["redrawn"] is False
+
+
+def test_redraw_adjust_flips_documented_seat_count_toward_new_party():
+    # A GOP redraw documented to cost Democrats 1 seat: the single most-marginal
+    # D district is overridden to lean-R; the safe D district and the R district
+    # are left alone.
+    results = ResultLookup([
+        _result(2024, "house-ZZ-01", 3.0, chamber="house"),   # marginal D -> should flip
+        _result(2024, "house-ZZ-02", 40.0, chamber="house"),  # safe D -> untouched
+        _result(2024, "house-ZZ-03", -20.0, chamber="house"), # R -> untouched
+    ])
+    adj = RedrawAdjust(results, shifts={"ZZ": -1})
+    assert adj.prior_override("house-ZZ-01") == -RedrawAdjust.CRACK_MARGIN
+    assert adj.prior_override("house-ZZ-02") is None
+    assert adj.prior_override("house-ZZ-03") is None
+
+
+def test_redraw_adjust_positive_delta_flips_marginal_r_seat_to_dem():
+    results = ResultLookup([
+        _result(2024, "house-ZZ-01", -2.0, chamber="house"),   # marginal R -> flip to D
+        _result(2024, "house-ZZ-02", -30.0, chamber="house"),  # safe R -> untouched
+    ])
+    adj = RedrawAdjust(results, shifts={"ZZ": 1})
+    assert adj.prior_override("house-ZZ-01") == RedrawAdjust.CRACK_MARGIN
+    assert adj.prior_override("house-ZZ-02") is None
+
+
+def test_redraw_adjust_only_applies_to_redrawn_target_seats():
+    # The override reaches build_row only when the seat is redrawn (a mid-decade
+    # remap state, target cycle >= the new map). A 2024 prior in a non-remap
+    # state is never overridden even if RedrawAdjust names it.
+    results = ResultLookup([_result(2024, "house-CA-30", 5.0, chamber="house")])
+    polls = PollLookup([])
+    adj = RedrawAdjust(results, shifts={"CA": -1})
+    # CA IS a remap state -> the override applies
+    ca = build_row("house-CA-30", 2026, "house", "CA", "30", results, polls,
+                   "2026-07-17", holder_party="D", redraw_adjust=adj)
+    assert ca.detail["redrawn"] is True
+    assert ca.x[1] == -RedrawAdjust.CRACK_MARGIN   # marginal D overridden to lean-R
+    # a training-vintage row (target 2024) is not redrawn -> no override
+    hist = build_row("house-CA-30", 2024, "house", "CA", "30", results, polls,
+                     "2024-11-05", holder_party="R", redraw_adjust=adj)
+    assert hist.detail["redrawn"] is False

@@ -90,3 +90,35 @@ def prior_is_stale(state: str, prior_cycle: int, target_cycle: int) -> bool:
     if prior_cycle is None:
         return False
     return prior_cycle < current_map_cycle(state) <= target_cycle
+
+
+# ---------------------------------------------------------------------------
+# Directional partisan effect of each mid-decade redraw.
+#
+# ``prior_is_stale`` above says only *that* a district was redrawn; it does not
+# say which way. But the 2025-26 redraws were overwhelmingly partisan, drawn to
+# change specific seat counts, and keeping a redrawn seat's unmodified 2024
+# margin ignores that direction entirely -- which systematically overstates the
+# party that LOST ground in the redraw (mostly Democrats, since most of these
+# were Republican gerrymanders). This table records the documented NET change in
+# Democratic-won U.S. House seats each new map is built to produce vs the 2024
+# map. Negative = a Republican gerrymander (Democrats lose seats); positive = a
+# Democratic map. Each figure is the number reported for the enacted map, cited
+# per line; it is deliberately the conservative, widely-reported figure, not a
+# partisan projection. ``features.RedrawAdjust`` turns these seat-count facts
+# into per-district prior overrides.
+#
+# Net across the table is about -8 D seats (a modest net-Republican effect,
+# because California's counter-map cancels most of Texas). This is a factual,
+# sourced input, NOT a knob tuned to a target topline: changing any entry only
+# ever moves that one state's most-marginal seats by the documented count.
+NET_DEM_SEAT_SHIFT: dict[str, int] = {
+    "TX": -5,  # 25R-13D -> ~30R-8D; SCOTUS allowed the map (NPR, Dec 4 2025)
+    "FL": -4,  # 20R-8D -> 24R-4D; enacted map (NBC/NPR, Apr 29 2026)
+    "OH": -2,  # 10R-5D -> 12R-3D commission map (Oct 31 2025)
+    "MO": -1,  # dismantled the KC-area 5th (Cleaver) district
+    "NC": -1,  # weakened the 1st (Davis) district
+    "LA": -1,  # Callais eliminated the 2nd majority-Black (D) district
+    "CA": +5,  # Prop 50 counter-gerrymander approved by voters (Nov 2025)
+    "UT": +1,  # court-ordered remedial map created one D-leaning seat
+}

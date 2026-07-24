@@ -206,6 +206,60 @@ def subgroup_metrics(scored: list[dict], rows_by_key: dict[tuple, FeatureRow]) -
     }
 
 
+def topline_estimator_backtest(results: ResultLookup, poll_lookup: PollLookup,
+                               state_lean=None, cycles: list[int] | None = None,
+                               simulations: int = 12000) -> dict:
+    """Which summary of the simulated seat distribution is the best point
+    estimate of the actual House seat count? Walk-forward: for each held-out
+    cycle, fit on earlier cycles, simulate that cycle's seats, and compare
+    candidate toplines (median, mean, mode, mean-of-top-4-modes) to the
+    certified result. Answers, on data, the question of whether the median is
+    the right headline number or whether some other statistic 'works every
+    time' -- and quantifies the model's irreducible seat-count error."""
+    from collections import Counter
+    from statistics import mean, median
+    from .features import build_row, StateLean
+    from .simulation import simulate_control
+    if state_lean is None:
+        state_lean = StateLean(results)
+    cycles = cycles or [c for c in results.cycles("house") if c >= 2008]
+    errs: dict[str, list[float]] = {k: [] for k in
+                                    ("median", "mean", "mode", "mean_top4")}
+    per_cycle = []
+    for t in cycles:
+        train_cycles = [c for c in results.cycles("house") if c < t]
+        if len(train_cycles) < MIN_TRAINING_CYCLES:
+            continue
+        train = historical_rows(results, poll_lookup, "house",
+                                cycles=train_cycles, state_lean=state_lean)
+        model = MarginModel(l2=2.0).fit(train)
+        pays = []
+        for r in results.seats(t, "house"):
+            row = build_row(r["seat_key"], t, "house", r["state"], r.get("district"),
+                            results, poll_lookup, f"{t}-11-08", state_lean=state_lean)
+            pays.append(model.forecast_payload(row, r["seat_key"]))
+        sim = simulate_control(pays, "house", simulations=simulations)
+        counts: list[int] = []
+        for k, v in sim["distribution"].items():
+            counts += [int(k)] * v
+        actual = sum(1 for r in results.seats(t, "house") if r["dem_margin"] > 0)
+        top4 = [s for s, _ in Counter(counts).most_common(4)]
+        estimates = {
+            "median": median(counts), "mean": mean(counts),
+            "mode": Counter(counts).most_common(1)[0][0],
+            "mean_top4": sum(top4) / len(top4)}
+        for name, val in estimates.items():
+            errs[name].append(abs(val - actual))
+        per_cycle.append({"cycle": t, "actual": actual,
+                          **{k: round(v, 1) for k, v in estimates.items()}})
+    mae = {k: round(sum(v) / len(v), 2) for k, v in errs.items() if v}
+    best = min(mae, key=mae.get) if mae else None
+    return {"mae_by_estimator": mae, "best_estimator": best,
+            "per_cycle": per_cycle,
+            "note": "MAE in seats vs certified House result; lower is better. The "
+                    "model's own seat-count error floor is the winning MAE."}
+
+
 def horizon_metrics(results: ResultLookup, poll_lookup: PollLookup,
                     chamber: str) -> dict:
     """Production-model accuracy at earlier poll cutoffs.

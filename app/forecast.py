@@ -18,7 +18,7 @@ from .model import MarginModel
 from .simulation import simulate_control
 
 CYCLE = 2026
-MODEL_VERSION = "2026.6"
+MODEL_VERSION = "2026.9"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {
@@ -68,15 +68,25 @@ RESEARCH_CLAIMS = [
      "validation": "Compare champion vs baseline-environment-only; midterm-cycle subgroup metrics",
      "decision": "Environment + midterm interaction features", "source": "Project research mandate"},
     {"id": "H-005", "claim": "Recently redrawn districts require greater uncertainty.",
-     "chamber": "house", "metric": "stale-prior drop + variance inflation",
-     "mechanism": "New boundaries break seat-history comparability; a district's "
-                  "past margin is on lines that no longer exist",
+     "chamber": "house", "metric": "variance inflation only, on top of a kept prior",
+     "mechanism": "New boundaries add real risk that a district's past margin no longer "
+                  "reflects its makeup, but most of a redrawn district's population and "
+                  "partisan character persists through a redraw",
      "status": "Production",
-     "validation": "app.redistricting records mid-decade remaps (TX, CA for 2026); a "
-                   "district prior predating the current map is dropped so the race "
-                   "falls back to the redistricting-immune state_lean + incumbency, "
-                   "and the seat gets +5pt (no-history) and a further +4pt sigma",
-     "decision": "Structural: event-dated stale-prior drop + variance inflation",
+     "validation": "app.redistricting records mid-decade remaps (TX, CA, MO, NC, OH, UT, "
+                   "LA, FL for 2026). FIRST ATTEMPT (2026.6) dropped the stale district "
+                   "prior entirely, falling back to state_lean; walk-forward tested "
+                   "against 2022 -- the one real historical cycle where nearly every "
+                   "House district's map changed post-census -- this made accuracy on "
+                   "the affected seats WORSE (48.5%, worse than a coin flip) than the "
+                   "unmodified prior (90.1%), and inflated the 2026 House median from "
+                   "235 to 246 by systematically mispredicting redrawn deep-red seats "
+                   "(e.g. Utah's 4 GOP-held seats) as competitive. CORRECTED (2026.7): "
+                   "the prior is kept as the point estimate; only sigma widens (+4pt-sd) "
+                   "for redrawn seats, which matched the full-revert walk-forward score "
+                   "almost exactly (90.15% vs 90.15%) while still pricing in the genuine "
+                   "extra boundary risk",
+     "decision": "Structural: event-dated variance inflation, prior retained",
      "source": "Project research mandate"},
     {"id": "S-001", "claim": "Senate races are more candidate-sensitive than House races.",
      "chamber": "senate", "metric": "chamber-specific residual sigma",
@@ -215,6 +225,70 @@ RESEARCH_CLAIMS = [
                  "demographic change IS captured per-seat; the remaining D-lean is the "
                  "validated midterm effect, expressed with wide intervals (House 80%: ~[210,260])",
      "source": "This project's backtests, investigated in response to a user methodology note"},
+    {"id": "H-006", "claim": "The 2025-26 mid-decade redraws are net-Republican, so scoring "
+                             "redrawn seats on their pre-redraw 2024 margins overstates "
+                             "Democrats; encode each redraw's documented net seat change.",
+     "chamber": "house", "metric": "redistricting.NET_DEM_SEAT_SHIFT + features.RedrawAdjust",
+     "mechanism": "A partisan map cracks a state's most-marginal seats for the drawing party; "
+                  "the retained old margin points the wrong way for exactly those seats",
+     "status": "Production",
+     "validation": "Documented net deltas (TX -5, FL -4, OH -2, MO/NC/LA -1, CA +5, UT +1; net "
+                   "~-8 D) override the |delta| most-marginal seats per state to a lean of the "
+                   "new party. Moves the House median 235->233 and P(D House) 0.83->0.79. The "
+                   "topline effect is small BY DESIGN: individual unpolled House seats carry ~26pt "
+                   "sigma this far out, so an 8-seat documented shift sits well inside the 80% "
+                   "interval [~211,257] - which is also why the user's ~223 intuition is fully "
+                   "consistent with the model (it is below the median, not outside the range). "
+                   "The bigger, correct effect is on the redrawn seats' individual RATINGS.",
+     "decision": "Ship as a sourced, per-seat structural input, NOT tuned to a topline. It cannot "
+                 "be walk-forward validated (2026 has not happened); the ideal replacement is real "
+                 "presidential-by-new-district partisanship, which the environment's network "
+                 "policy currently blocks (Ballotpedia/Wikipedia return 403).",
+     "source": "Documented enacted-map seat targets (NPR, NBC, state commissions), 2026"},
+    {"id": "M-002", "claim": "REJECTED: recency-weighting the training cycles to shrink the "
+                             "midterm swing (and pull the topline down) fails out of sample.",
+     "chamber": "house", "metric": "walk-forward mean log loss vs exponential cycle half-life",
+     "mechanism": "Down-weighting older cycles was hypothesised to reflect the smaller modern "
+                  "midterm waves (2022 was only R+2.8) and lower the D-lean",
+     "status": "Rejected",
+     "validation": "Walk-forward 2006-2024, core tier: uniform weighting logloss 0.2707 beats "
+                   "every half-life tested (12->0.2744, 8->0.2764, 6->0.2783, 4->0.2821). Older "
+                   "cycles carry real signal; shrinking them only degrades accuracy. Also "
+                   "confirmed the two R-president-midterm precedents (2006, 2018) had D swings of "
+                   "+16 and +18 in median district margin - the model's regularized +5.75 is "
+                   "already FAR below them, so the swing is conservative, not inflated.",
+     "decision": "Keep uniform cycle weighting. Lowering the topline by recency-weighting or "
+                 "shrinking a conservative swing would be fitting the answer, not the data.",
+     "source": "This project's walk-forward backtests, in response to a user target-number note"},
+    {"id": "T-001", "claim": "The median of the simulated seat distribution is the best single "
+                             "topline number; the mode and 'average of the top few outcomes' "
+                             "are not improvements.",
+     "chamber": "house", "metric": "walk-forward MAE of each estimator vs certified seat count",
+     "mechanism": "For a near-symmetric seat distribution the median, mean and mode nearly "
+                  "coincide; picking the mode or a top-k average just adds noise",
+     "status": "Validated",
+     "validation": "backtest.topline_estimator_backtest, walk-forward 2008-2024: mean absolute "
+                   "error median 16.7, mean 16.7, mode 18.7, mean-of-top-4 17.5. Median (tied "
+                   "with mean) is best; the hypothesised mode / top-k averages are slightly "
+                   "WORSE. The winning MAE of ~16.7 seats is the model's irreducible seat-count "
+                   "error this far out, driven by wave-reversal cycles (2010, 2020) with no "
+                   "consistent directional bias to correct - so the 2026 median (~232) carries a "
+                   "genuine +/-16-seat error bar, and a topline in the low 220s is well within it.",
+     "decision": "Keep the median as the headline; report it with the 80% interval, never as a "
+                 "point estimate. Changing the estimator was tested and rejected.",
+     "source": "This project's walk-forward backtests, in response to a user topline-statistic idea"},
+    {"id": "SIM-001", "claim": "FIXED BUG: the simulation's tipping-point seat was wrong.",
+     "chamber": "both", "metric": "pivotal-seat identification in simulate_control",
+     "mechanism": "It recorded whichever race came LAST in list order among a simulation's "
+                  "Democratic wins - an artifact of iteration order, not the pivotal seat",
+     "status": "Production",
+     "validation": "Now each simulation ranks all seats by realized margin and takes the one at "
+                   "the majority-making rank (accounting for safe not-up seats via "
+                   "base_dem_seats). Verified: the House pivot is a seat forecast at ~0 margin "
+                   "(WI-03, +0.5), and a synthetic 34-safe-D Senate correctly returns the 17th "
+                   "most-Democratic contested seat. Especially visible for the Senate's short "
+                   "race list, where the old bug was most wrong.",
+     "decision": "Per-simulation pivotal-seat tally in simulate_control", "source": "User bug report"},
 ]
 
 
@@ -332,8 +406,9 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     races = build_race_universe()
     results = ResultLookup(store.all_results())
     poll_lookup = PollLookup(store.all_polls())
-    from .features import StateLean
+    from .features import StateLean, RedrawAdjust
     state_lean = StateLean(results)
+    redraw_adjust = RedrawAdjust(results)
 
     training: list = []
     for chamber in ("house", "senate"):
@@ -363,7 +438,8 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     for race in races:
         row = build_row(race["seat_key"], CYCLE, race["chamber"], race["state"],
                         race["district"], results, poll_lookup, as_of,
-                        holder_party=race["incumbent_party"], state_lean=state_lean)
+                        holder_party=race["incumbent_party"], state_lean=state_lean,
+                        redraw_adjust=redraw_adjust)
         feature_rows[race["id"]] = row
         payload = models[race["chamber"]].forecast_payload(row, race["id"])
         payload.update({"as_of": as_of, "model_version": MODEL_VERSION,

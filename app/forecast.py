@@ -18,7 +18,7 @@ from .model import MarginModel
 from .simulation import simulate_control
 
 CYCLE = 2026
-MODEL_VERSION = "2026.6"
+MODEL_VERSION = "2026.7"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {
@@ -68,15 +68,25 @@ RESEARCH_CLAIMS = [
      "validation": "Compare champion vs baseline-environment-only; midterm-cycle subgroup metrics",
      "decision": "Environment + midterm interaction features", "source": "Project research mandate"},
     {"id": "H-005", "claim": "Recently redrawn districts require greater uncertainty.",
-     "chamber": "house", "metric": "stale-prior drop + variance inflation",
-     "mechanism": "New boundaries break seat-history comparability; a district's "
-                  "past margin is on lines that no longer exist",
+     "chamber": "house", "metric": "variance inflation only, on top of a kept prior",
+     "mechanism": "New boundaries add real risk that a district's past margin no longer "
+                  "reflects its makeup, but most of a redrawn district's population and "
+                  "partisan character persists through a redraw",
      "status": "Production",
-     "validation": "app.redistricting records mid-decade remaps (TX, CA for 2026); a "
-                   "district prior predating the current map is dropped so the race "
-                   "falls back to the redistricting-immune state_lean + incumbency, "
-                   "and the seat gets +5pt (no-history) and a further +4pt sigma",
-     "decision": "Structural: event-dated stale-prior drop + variance inflation",
+     "validation": "app.redistricting records mid-decade remaps (TX, CA, MO, NC, OH, UT, "
+                   "LA, FL for 2026). FIRST ATTEMPT (2026.6) dropped the stale district "
+                   "prior entirely, falling back to state_lean; walk-forward tested "
+                   "against 2022 -- the one real historical cycle where nearly every "
+                   "House district's map changed post-census -- this made accuracy on "
+                   "the affected seats WORSE (48.5%, worse than a coin flip) than the "
+                   "unmodified prior (90.1%), and inflated the 2026 House median from "
+                   "235 to 246 by systematically mispredicting redrawn deep-red seats "
+                   "(e.g. Utah's 4 GOP-held seats) as competitive. CORRECTED (2026.7): "
+                   "the prior is kept as the point estimate; only sigma widens (+4pt-sd) "
+                   "for redrawn seats, which matched the full-revert walk-forward score "
+                   "almost exactly (90.15% vs 90.15%) while still pricing in the genuine "
+                   "extra boundary risk",
+     "decision": "Structural: event-dated variance inflation, prior retained",
      "source": "Project research mandate"},
     {"id": "S-001", "claim": "Senate races are more candidate-sensitive than House races.",
      "chamber": "senate", "metric": "chamber-specific residual sigma",

@@ -54,6 +54,15 @@ def test_two_tier_routing_and_bounds():
     no_prior = _row("house", 2026, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0], None,
                     poll_count=0, has_prior=False)
     assert model.predict(no_prior).sigma > p_unpolled.sigma
+    # a redrawn seat keeps its (stale) prior in the mean but gets wider
+    # uncertainty than an identical non-redrawn seat -- walk-forward testing
+    # against 2022 showed dropping the stale prior itself hurts accuracy, so
+    # only sigma should widen, not the point estimate.
+    redrawn = _row("house", 2026, unpolled.x, None, poll_count=0, has_prior=True)
+    redrawn.detail["redrawn"] = True
+    p_redrawn = model.predict(redrawn)
+    assert p_redrawn.mean == p_unpolled.mean
+    assert p_redrawn.sigma > p_unpolled.sigma
 
 
 def test_forecast_payload_shape():

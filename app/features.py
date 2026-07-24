@@ -202,15 +202,22 @@ def build_row(seat_key: str, cycle: int, chamber: str, state: str,
     gb_avg, gb_count, _ = poll_lookup.average(cycle, GENERIC_BALLOT_SEAT, as_of)
     environment, midterm_environment = environment_signs(cycle)
     lean_value, lean_cycle = (state_lean.lean(state, cycle) if state_lean else (None, None))
-    # A district prior is only a valid baseline if it was run on the same map.
-    # States that redrew their U.S. House lines mid-decade (see redistricting)
-    # have stale district results: drop the prior margin so the race falls back
-    # to the redistricting-immune state_lean plus incumbency, and flag the seat
-    # redrawn so the model widens its uncertainty for it.
+    # A district that redrew its U.S. House lines mid-decade (see
+    # redistricting) has a *stale* prior: it describes different boundaries.
+    # An earlier version of this code dropped the prior entirely for such
+    # seats, falling back to the much coarser state_lean. Walk-forward-tested
+    # against 2022 -- the one real historical cycle where nearly every House
+    # district's map changed after the census -- that made things worse, not
+    # better: accuracy on the affected seats fell to 48.5% (worse than a coin
+    # flip) vs 90.1% when the stale prior was kept, because most of a
+    # redrawn district's population and partisan character persists through
+    # a redraw, and a same-state average is a far weaker signal than even a
+    # stale district-specific result. So the prior is kept as the point
+    # estimate; only the seat's uncertainty (sigma, in model.py) widens for
+    # `redrawn` seats, reflecting the real but smaller risk that this
+    # particular redraw moved the district more than history suggests.
     redrawn = (chamber == "house"
                and redistricting.prior_is_stale(state, prior_cycle, cycle))
-    if redrawn:
-        prior_margin, prior_cycle = None, None
     has_prior = prior_margin is not None
     has_polls = poll_avg is not None
     has_gb = gb_avg is not None

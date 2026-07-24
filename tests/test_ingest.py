@@ -1,6 +1,6 @@
 import textwrap
 
-from app.ingest import csv_results, fte_polls, legislators
+from app.ingest import csv_results, fte_polls, legislators, medsl
 
 RAW_POLLS_HEADER = (
     "poll_id,question_id,race_id,cycle,location,type_simple,race,pollster,"
@@ -79,6 +79,21 @@ def test_legislators_parse_builds_2026_universe():
     assert set(keys) == {"house-OH-01", "senate-NC", "senate-OH-special"}
     assert keys["senate-OH-special"]["party"] == "R"
     assert dem_not_up == 1  # the Independent counts toward the Democratic caucus
+
+
+def test_bundled_senate_file_is_real_and_parses():
+    # Guards the root-cause Senate fix: the bundled Senate returns must exist,
+    # parse, and match known certified margins (so the model never silently
+    # falls back to synthetic Senate data again).
+    assert medsl.BUNDLED_SENATE_FILE.exists(), "bundled Senate returns missing"
+    rows = medsl.parse(medsl.BUNDLED_SENATE_FILE.read_bytes(), "senate")
+    cycles = sorted({r["cycle"] for r in rows})
+    assert cycles[0] <= 2004 and 2024 in cycles and len(cycles) >= 8
+    by = {(r["cycle"], r["state"]): r["dem_margin"] for r in rows}
+    # spot checks vs reality (two-party Dem margin)
+    assert abs(by[(2018, "TX")] - (-2.6)) < 1.5   # Cruz beat O'Rourke ~2.6
+    assert abs(by[(2012, "MA")] - (7.6)) < 1.5    # Warren ~+7.6
+    assert by[(2014, "NC")] < 0                    # Tillis (R) won
 
 
 def test_csv_results_importer(tmp_path, temp_db):

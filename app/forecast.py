@@ -18,7 +18,7 @@ from .model import MarginModel
 from .simulation import simulate_control
 
 CYCLE = 2026
-MODEL_VERSION = "2026.7"
+MODEL_VERSION = "2026.8"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {
@@ -225,6 +225,41 @@ RESEARCH_CLAIMS = [
                  "demographic change IS captured per-seat; the remaining D-lean is the "
                  "validated midterm effect, expressed with wide intervals (House 80%: ~[210,260])",
      "source": "This project's backtests, investigated in response to a user methodology note"},
+    {"id": "H-006", "claim": "The 2025-26 mid-decade redraws are net-Republican, so scoring "
+                             "redrawn seats on their pre-redraw 2024 margins overstates "
+                             "Democrats; encode each redraw's documented net seat change.",
+     "chamber": "house", "metric": "redistricting.NET_DEM_SEAT_SHIFT + features.RedrawAdjust",
+     "mechanism": "A partisan map cracks a state's most-marginal seats for the drawing party; "
+                  "the retained old margin points the wrong way for exactly those seats",
+     "status": "Production",
+     "validation": "Documented net deltas (TX -5, FL -4, OH -2, MO/NC/LA -1, CA +5, UT +1; net "
+                   "~-8 D) override the |delta| most-marginal seats per state to a lean of the "
+                   "new party. Moves the House median 235->233 and P(D House) 0.83->0.79. The "
+                   "topline effect is small BY DESIGN: individual unpolled House seats carry ~26pt "
+                   "sigma this far out, so an 8-seat documented shift sits well inside the 80% "
+                   "interval [~211,257] - which is also why the user's ~223 intuition is fully "
+                   "consistent with the model (it is below the median, not outside the range). "
+                   "The bigger, correct effect is on the redrawn seats' individual RATINGS.",
+     "decision": "Ship as a sourced, per-seat structural input, NOT tuned to a topline. It cannot "
+                 "be walk-forward validated (2026 has not happened); the ideal replacement is real "
+                 "presidential-by-new-district partisanship, which the environment's network "
+                 "policy currently blocks (Ballotpedia/Wikipedia return 403).",
+     "source": "Documented enacted-map seat targets (NPR, NBC, state commissions), 2026"},
+    {"id": "M-002", "claim": "REJECTED: recency-weighting the training cycles to shrink the "
+                             "midterm swing (and pull the topline down) fails out of sample.",
+     "chamber": "house", "metric": "walk-forward mean log loss vs exponential cycle half-life",
+     "mechanism": "Down-weighting older cycles was hypothesised to reflect the smaller modern "
+                  "midterm waves (2022 was only R+2.8) and lower the D-lean",
+     "status": "Rejected",
+     "validation": "Walk-forward 2006-2024, core tier: uniform weighting logloss 0.2707 beats "
+                   "every half-life tested (12->0.2744, 8->0.2764, 6->0.2783, 4->0.2821). Older "
+                   "cycles carry real signal; shrinking them only degrades accuracy. Also "
+                   "confirmed the two R-president-midterm precedents (2006, 2018) had D swings of "
+                   "+16 and +18 in median district margin - the model's regularized +5.75 is "
+                   "already FAR below them, so the swing is conservative, not inflated.",
+     "decision": "Keep uniform cycle weighting. Lowering the topline by recency-weighting or "
+                 "shrinking a conservative swing would be fitting the answer, not the data.",
+     "source": "This project's walk-forward backtests, in response to a user target-number note"},
 ]
 
 
@@ -342,8 +377,9 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     races = build_race_universe()
     results = ResultLookup(store.all_results())
     poll_lookup = PollLookup(store.all_polls())
-    from .features import StateLean
+    from .features import StateLean, RedrawAdjust
     state_lean = StateLean(results)
+    redraw_adjust = RedrawAdjust(results)
 
     training: list = []
     for chamber in ("house", "senate"):
@@ -373,7 +409,8 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     for race in races:
         row = build_row(race["seat_key"], CYCLE, race["chamber"], race["state"],
                         race["district"], results, poll_lookup, as_of,
-                        holder_party=race["incumbent_party"], state_lean=state_lean)
+                        holder_party=race["incumbent_party"], state_lean=state_lean,
+                        redraw_adjust=redraw_adjust)
         feature_rows[race["id"]] = row
         payload = models[race["chamber"]].forecast_payload(row, race["id"])
         payload.update({"as_of": as_of, "model_version": MODEL_VERSION,

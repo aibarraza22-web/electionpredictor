@@ -157,6 +157,63 @@ class StateLean:
         return self._mean[(state, cycle)], cycle
 
 
+class RedrawAdjust:
+    """Per-district prior overrides encoding the *direction* of a mid-decade
+    redraw, from the documented net seat-count changes in
+    ``redistricting.NET_DEM_SEAT_SHIFT``.
+
+    ``prior_is_stale`` tells the model a seat was redrawn; this tells it which
+    way. For a state documented to lose ``k`` Democratic seats, the ``k``
+    most-marginal current D districts are the ones a Republican gerrymander
+    cracks first, so their retained 2024 prior is overridden to a lean-R margin
+    (``-CRACK_MARGIN``); symmetrically for a Democratic map. Only those ``k``
+    seats per state are touched -- safe districts keep their real prior -- so
+    the override asserts exactly the documented seat count and nothing more.
+
+    Why a modest ``CRACK_MARGIN`` and not the seat's mirror image: a partisan
+    map-drawer spreads the favored party efficiently, making a flipped seat a
+    durable-but-not-safe lean (~R+8), not a landslide. The topline is
+    insensitive to the exact value (the seats stay in the model's wide
+    unpolled uncertainty band either way); it mainly fixes the *rating* of the
+    specific redrawn seats, which otherwise read as the wrong party.
+
+    This is a 2026-specific, sourced structural input that cannot be
+    walk-forward validated (2026 has not happened). It is intentionally small
+    and per-seat; the ideal replacement is real presidential-by-new-district
+    partisanship, which is not fetchable in this environment."""
+
+    CRACK_MARGIN = 8.0
+
+    def __init__(self, results: "ResultLookup",
+                 shifts: dict[str, int] | None = None):
+        from . import redistricting
+        shifts = redistricting.NET_DEM_SEAT_SHIFT if shifts is None else shifts
+        latest: dict[str, dict[str, float]] = {}
+        for (cycle, seat), row in results._by_seat.items():
+            if not seat.startswith("house-"):
+                continue
+            state = row["state"]
+            seen = latest.setdefault(state, {})
+            prev = seen.get(seat)
+            # keep the most recent pre-2026 margin as the seat's live prior
+            if (prev is None or cycle > prev[0]) and cycle < 2026:
+                seen[seat] = (cycle, row["dem_margin"])
+        self._override: dict[str, float] = {}
+        for state, delta in shifts.items():
+            seats = {seat: m for seat, (c, m) in latest.get(state, {}).items()}
+            if delta < 0:  # crack the |delta| most-marginal D seats to lean-R
+                targets = sorted((m, s) for s, m in seats.items() if m > 0)
+                for _, seat in targets[:abs(delta)]:
+                    self._override[seat] = -self.CRACK_MARGIN
+            elif delta > 0:  # flip the delta least-safe R seats to lean-D
+                targets = sorted((abs(m), s) for s, m in seats.items() if m <= 0)
+                for _, seat in targets[:delta]:
+                    self._override[seat] = self.CRACK_MARGIN
+
+    def prior_override(self, seat_key: str) -> float | None:
+        return self._override.get(seat_key)
+
+
 class PollLookup:
     """Time-decayed poll averages with an explicit as-of cutoff."""
 
@@ -196,7 +253,8 @@ def build_row(seat_key: str, cycle: int, chamber: str, state: str,
               district: str | None, results: ResultLookup, poll_lookup: PollLookup,
               as_of: str, actual_margin: float | None = None,
               holder_party: str | None = None,
-              state_lean: "StateLean | None" = None) -> FeatureRow:
+              state_lean: "StateLean | None" = None,
+              redraw_adjust: "RedrawAdjust | None" = None) -> FeatureRow:
     prior_margin, prior_cycle = results.prior(cycle, seat_key, chamber)
     poll_avg, poll_count, last_poll = poll_lookup.average(cycle, seat_key, as_of)
     gb_avg, gb_count, _ = poll_lookup.average(cycle, GENERIC_BALLOT_SEAT, as_of)
@@ -218,6 +276,14 @@ def build_row(seat_key: str, cycle: int, chamber: str, state: str,
     # particular redraw moved the district more than history suggests.
     redrawn = (chamber == "house"
                and redistricting.prior_is_stale(state, prior_cycle, cycle))
+    if redrawn and redraw_adjust is not None:
+        # For the specific districts this redraw was documented to flip, the
+        # retained 2024 margin points the wrong way; replace it with the new
+        # map's lean (see RedrawAdjust). Non-flipped redrawn seats keep their
+        # real prior and only get the widened redraw sigma.
+        override = redraw_adjust.prior_override(seat_key)
+        if override is not None:
+            prior_margin = override
     has_prior = prior_margin is not None
     has_polls = poll_avg is not None
     has_gb = gb_avg is not None

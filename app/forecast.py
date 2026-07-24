@@ -18,7 +18,7 @@ from .model import MarginModel
 from .simulation import simulate_control
 
 CYCLE = 2026
-MODEL_VERSION = "2026.8"
+MODEL_VERSION = "2026.9"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {
@@ -260,6 +260,35 @@ RESEARCH_CLAIMS = [
      "decision": "Keep uniform cycle weighting. Lowering the topline by recency-weighting or "
                  "shrinking a conservative swing would be fitting the answer, not the data.",
      "source": "This project's walk-forward backtests, in response to a user target-number note"},
+    {"id": "T-001", "claim": "The median of the simulated seat distribution is the best single "
+                             "topline number; the mode and 'average of the top few outcomes' "
+                             "are not improvements.",
+     "chamber": "house", "metric": "walk-forward MAE of each estimator vs certified seat count",
+     "mechanism": "For a near-symmetric seat distribution the median, mean and mode nearly "
+                  "coincide; picking the mode or a top-k average just adds noise",
+     "status": "Validated",
+     "validation": "backtest.topline_estimator_backtest, walk-forward 2008-2024: mean absolute "
+                   "error median 16.7, mean 16.7, mode 18.7, mean-of-top-4 17.5. Median (tied "
+                   "with mean) is best; the hypothesised mode / top-k averages are slightly "
+                   "WORSE. The winning MAE of ~16.7 seats is the model's irreducible seat-count "
+                   "error this far out, driven by wave-reversal cycles (2010, 2020) with no "
+                   "consistent directional bias to correct - so the 2026 median (~232) carries a "
+                   "genuine +/-16-seat error bar, and a topline in the low 220s is well within it.",
+     "decision": "Keep the median as the headline; report it with the 80% interval, never as a "
+                 "point estimate. Changing the estimator was tested and rejected.",
+     "source": "This project's walk-forward backtests, in response to a user topline-statistic idea"},
+    {"id": "SIM-001", "claim": "FIXED BUG: the simulation's tipping-point seat was wrong.",
+     "chamber": "both", "metric": "pivotal-seat identification in simulate_control",
+     "mechanism": "It recorded whichever race came LAST in list order among a simulation's "
+                  "Democratic wins - an artifact of iteration order, not the pivotal seat",
+     "status": "Production",
+     "validation": "Now each simulation ranks all seats by realized margin and takes the one at "
+                   "the majority-making rank (accounting for safe not-up seats via "
+                   "base_dem_seats). Verified: the House pivot is a seat forecast at ~0 margin "
+                   "(WI-03, +0.5), and a synthetic 34-safe-D Senate correctly returns the 17th "
+                   "most-Democratic contested seat. Especially visible for the Senate's short "
+                   "race list, where the old bug was most wrong.",
+     "decision": "Per-simulation pivotal-seat tally in simulate_control", "source": "User bug report"},
 ]
 
 

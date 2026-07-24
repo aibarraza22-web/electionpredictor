@@ -80,11 +80,11 @@ def test_redrawn_district_drops_stale_prior_but_keeps_state_lean():
 
 
 def test_non_redrawn_state_keeps_prior():
-    # North Carolina is not in the mid-decade remap list: a 2024 House prior
+    # Pennsylvania is not in the mid-decade remap list: a 2024 House prior
     # is on the current map and must be retained.
-    results = ResultLookup([_result(2024, "house-NC-01", 4.0, chamber="house")])
+    results = ResultLookup([_result(2024, "house-PA-01", 4.0, chamber="house")])
     polls = PollLookup([])
-    row = build_row("house-NC-01", 2026, "house", "NC", "01", results, polls,
+    row = build_row("house-PA-01", 2026, "house", "PA", "01", results, polls,
                     "2026-07-17", holder_party="D")
     assert row.has_prior is True
     assert row.detail["redrawn"] is False

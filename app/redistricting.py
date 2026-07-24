@@ -45,6 +45,37 @@ MIDDECADE_REMAP_CYCLE: dict[str, int] = {
     # congressional map for 2026 in response; 2024 results are on the prior
     # citizen-commission lines.
     "CA": 2026,
+    # Missouri's legislature passed a new GOP-drawn map (targeting the KC-area
+    # 5th district); upheld as constitutional by the Missouri Supreme Court
+    # (May 2026) and, as of this writing, in effect for 2026 despite an
+    # ongoing referendum-suspension fight. 2024 results are on the prior lines.
+    "MO": 2026,
+    # North Carolina's legislature passed a new GOP-drawn map in Oct 2025; a
+    # federal three-judge panel allowed it to be used for the 2026 midterms
+    # (ruling Nov 26, 2025). 2024 results are on the 2023 lines.
+    "NC": 2026,
+    # Ohio's Redistricting Commission approved a new map on Oct 31, 2025 after
+    # missing the legislature's statutory deadline (increasing the GOP seat
+    # share); the state supreme court found no jurisdiction to block it before
+    # 2026. 2024 results are on the prior lines.
+    "OH": 2026,
+    # Utah: a court-ordered remedial map (adopted Nov 2025) replaced the
+    # legislature's map after years of litigation over Salt Lake County
+    # splitting; the Utah Supreme Court dismissed the legislature's appeal
+    # (Feb 2026), leaving it in place for 2026. 2024 results are on the old,
+    # 4-safe-seat lines.
+    "UT": 2026,
+    # Louisiana's legislature redrew its map (signed by Gov. Landry) after the
+    # US Supreme Court's Louisiana v. Callais decision (Apr 29, 2026) struck
+    # down the prior map's second majority-Black district; the new map is
+    # expected to be used in November 2026. 2024 results are on the
+    # struck-down map.
+    "LA": 2026,
+    # Florida's legislature passed, and Gov. DeSantis signed (May 4, 2026), a
+    # new GOP-favored map reworking 21 of 28 districts; the Florida Supreme
+    # Court denied an injunction (Jun 10-11, 2026), leaving it in effect for
+    # 2026 pending the underlying suit. 2024 results are on the prior lines.
+    "FL": 2026,
 }
 
 

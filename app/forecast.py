@@ -162,6 +162,26 @@ RESEARCH_CLAIMS = [
                  "races with no polls). The competitive-race ceiling (~82% house / ~93% senate "
                  "polled) is set by irreducible ~3-4pt poll error, not by the blend.",
      "source": "This project's own backtests + user push to maximise winner accuracy"},
+    {"id": "P-004", "claim": "The competitive-race (toss-up) accuracy ceiling is set by "
+                             "irreducible outcome randomness and UNPREDICTABLE poll bias, not by "
+                             "a shortage of data or model capacity.",
+     "chamber": "both", "metric": "decomposition of wrong calls on polled races (2010-2024)",
+     "mechanism": "A near-50/50 race is partly a coin flip; and whether a given cycle's polls are "
+                  "accurate is not knowable until after the election",
+     "status": "Validated",
+     "validation": "Ingested real 538 polls and dissected every wrong call on polled races. Of "
+                   "125 House misses: 43% were within 3pt (near coin-flips); of the 5pt+ misses, "
+                   "33 had the POLLS also wrong (irreducible poll error) and only 19 had polls "
+                   "right but fundamentals overriding. Critically, deferring fully to polls to "
+                   "capture those 19 is NOT robust: polls-only beats the blend in 2010/2016/2018 "
+                   "but LOSES in 2020/2022, when polls were systematically biased and the "
+                   "fundamentals correctly anchored the call. You cannot know at prediction time "
+                   "which regime you are in, so the blend is the robust optimum.",
+     "decision": "No change: the poll/fundamentals blend is robust-optimal. Further gains need "
+                 "signals this environment blocks (FEC finance API, precinct/demographic data) "
+                 "and would still be bounded by the irreducible floor. Documented rather than "
+                 "chased, per the no-post-hoc-fitting rule.",
+     "source": "User push to raise toss-up accuracy; this project's backtests"},
     {"id": "N-002", "claim": "FIXED BUG: the control simulation's shared national-shock size "
                              "was a hardcoded constant (3.5pts), understating real cycle-to-"
                              "cycle correlated error and producing false aggregate certainty.",

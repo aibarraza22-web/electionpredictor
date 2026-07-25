@@ -186,33 +186,39 @@ RESEARCH_CLAIMS = [
                  "chased, per the no-post-hoc-fitting rule.",
      "source": "User push to raise toss-up accuracy; this project's backtests"},
     {"id": "P-005", "claim": "REJECTED: campaign-finance receipts disparity, tested for real with "
-                             "historical FEC data, does NOT improve competitive-race accuracy -- "
-                             "it makes it worse.",
-     "chamber": "house", "metric": "walk-forward winner accuracy on polled races with real FEC "
-                                   "finance data, 2012-2022",
+                             "complete historical FEC data for BOTH chambers, does NOT improve "
+                             "competitive-race accuracy -- it makes House worse and is noise, not "
+                             "signal, for Senate.",
+     "chamber": "both", "metric": "walk-forward winner accuracy on polled races with real FEC "
+                                  "finance data, 2012-2024 (all 7 cycles, both chambers)",
      "mechanism": "The environment's network policy opened mid-session (Harvard Dataverse and the "
                   "FEC API both became reachable), so this hypothesis -- previously blocked -- "
                   "could finally be tested with real data instead of reasoned about",
      "status": "Rejected",
-     "validation": "Pulled real historical FEC candidate-totals (api.open.fec.gov, DEMO_KEY, "
-                   "House 2012-2022, ~12,000 candidate-cycle rows) and computed each race's "
-                   "receipts disparity. Tested three ways, all walk-forward, all on the SAME "
-                   "polled-race subset: (1) directional agreement on the model's own wrong calls "
-                   "looked promising (68% of 96 misses, robust 71%/71%/71% across 2012/2016/2018, "
-                   "though a 50% outlier in 2014); (2) blending finance into the prediction at "
-                   "every weight from 0.05 to 0.50 made accuracy WORSE than not using it at all "
-                   "(0.8085 -> as low as 0.7319, monotonically worse with more weight); (3) adding "
-                   "finance as a genuine ridge-fit feature (not a hand-picked weight) also hurt "
-                   "(0.8165 -> 0.7984). Explained: finance correlates with actual outcome at only "
-                   "0.23 vs polls' 0.75, and is not simply redundant with polls (their mutual "
-                   "correlation is only 0.19) -- it is an independently WEAK, noisy signal, and "
-                   "ridge cannot extract a stable coefficient from it on this sample size.",
-     "decision": "Do not add finance as a model input. Directional agreement on hindsight misses "
-                 "is not sufficient evidence -- (2) and (3) are what determine whether a feature "
-                 "earns its place, and finance fails both. Senate was not independently tested "
-                 "(FEC's DEMO_KEY rate limit did not allow pulling Senate cycles in this session), "
-                 "but the same mechanism (weak marginal correlation once polls are known) is not "
-                 "House-specific and is unlikely to reverse for Senate.",
+     "validation": "Pulled the complete real historical FEC candidate-totals (api.open.fec.gov, "
+                   "DEMO_KEY, House+Senate, 2012-2024, 17,387 candidate-cycle rows -- every cycle, "
+                   "both chambers) and computed each race's receipts disparity. Tested three ways, "
+                   "walk-forward, on the same polled-race subset: (1) directional agreement on the "
+                   "model's own wrong calls was noisy, not robust once all cycles were in (House: "
+                   "71/50/71/71/30/62% across 2012-2022 -- the 2020 cycle actually fell BELOW "
+                   "chance); (2) blending finance into the prediction at every weight 0.05-0.50 "
+                   "made accuracy WORSE for both chambers (House 0.8085->0.7319, Senate "
+                   "0.9023->0.8563, both monotonically worse with more weight); (3) adding finance "
+                   "as a genuine ridge-fit feature hurt House (0.8165->0.7984) but showed a small "
+                   "apparent GAIN for Senate (0.9080->0.9253). Investigated that gain specifically: "
+                   "it is +3 correct calls out of 174, concentrated entirely in 2 of 6 cycles "
+                   "(2018, 2020), with 2014/2022 going the other way -- a small-sample artifact, "
+                   "not a robust cycle-independent effect, and it contradicts the more conservative "
+                   "blend-weight test on the identical data. Mechanistically: finance correlates "
+                   "with actual outcome at only 0.22 vs polls' 0.76, and is not simply redundant "
+                   "with polls (mutual correlation only 0.19) -- an independently WEAK, noisy "
+                   "signal in both chambers.",
+     "decision": "Do not add finance as a model input, for either chamber. Directional agreement "
+                 "on hindsight misses is not sufficient evidence, and a positive result in only "
+                 "one of two rigorous test methodologies -- especially one traceable to two "
+                 "specific cycles out of six -- is not evidence either; tests (2) and one that "
+                 "survives a mechanism check are what determine whether a feature earns its "
+                 "place, and finance fails on both counts in both chambers.",
      "source": "User challenge to use 'insane amounts of data' to raise toss-up accuracy; tested "
                "for real once the network policy allowed it, rather than assumed blocked"},
     {"id": "N-002", "claim": "FIXED BUG: the control simulation's shared national-shock size "

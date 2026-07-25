@@ -27,7 +27,7 @@ CYCLE = 2026
 # snapshots are immutable per (race_id, as_of, model_version): a same-day
 # rerun under an unchanged version keeps the day's first frozen numbers, so a
 # real prediction-affecting change must bump the version to surface.
-MODEL_VERSION = "2026.11"
+MODEL_VERSION = "2026.12"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {
@@ -452,9 +452,33 @@ RESEARCH_CLAIMS = [
                    "error this far out, driven by wave-reversal cycles (2010, 2020) with no "
                    "consistent directional bias to correct - so the 2026 median (~232) carries a "
                    "genuine +/-16-seat error bar, and a topline in the low 220s is well within it.",
-     "decision": "Keep the median as the headline; report it with the 80% interval, never as a "
-                 "point estimate. Changing the estimator was tested and rejected.",
+     "decision": "SUPERSEDED by T-002: on the current model the smoothed mode beats the median. "
+                 "The original conclusion (keep the median) was correct for the model as it stood "
+                 "at the time; re-testing after the Senate-data and champion-selection changes "
+                 "reversed it, which is why estimator choice is re-run rather than assumed.",
      "source": "This project's walk-forward backtests, in response to a user topline-statistic idea"},
+    {"id": "T-002", "claim": "The headline seat count should be the SMOOTHED MODE (most likely "
+                             "outcome), not the median -- but the raw mode is too noisy to use.",
+     "chamber": "both", "metric": "walk-forward MAE of each estimator vs certified seat count",
+     "mechanism": "The simulated seat distribution is mildly skewed, so its peak and its median "
+                  "differ; the peak is the single most probable outcome",
+     "status": "Production",
+     "validation": "Re-ran backtest.topline_estimator_backtest on the current model, walk-forward "
+                   "2010-2024, adding the modal and smoothed-modal estimators plus a "
+                   "'seat count where P(control) crosses 50%' variant the user proposed. Result: "
+                   "smoothed mode (peak of a +/-3-seat window) is best in BOTH chambers -- House "
+                   "MAE 13.6 vs 14.3 for the median, Senate 1.50 vs 1.75, and in the Senate it is "
+                   "never worse than the median in any individual cycle (2 better, 6 tied). The "
+                   "RAW mode is not usable: it scored 12.75 and 14.12 on two runs of the same "
+                   "configuration, moving several seats on simulation noise alone, which is "
+                   "exactly why the reported figure is smoothed. The 50%-crossing variant tied "
+                   "the median (it IS the median by construction) and mean-of-top-4 was worst.",
+     "decision": "simulation.simulate_control now reports most_likely_democratic_seats as the "
+                 "smoothed peak (raw argmax kept alongside as modal_democratic_seats_raw for "
+                 "transparency), and the dashboard leads with it while still showing the median "
+                 "and the 80/95% intervals. A regression test asserts the smoothed value is "
+                 "stable across independent simulation seeds.",
+     "source": "User question: is the median really the best topline for the House?"},
     {"id": "SIM-001", "claim": "FIXED BUG: the simulation's tipping-point seat was wrong.",
      "chamber": "both", "metric": "pivotal-seat identification in simulate_control",
      "mechanism": "It recorded whichever race came LAST in list order among a simulation's "

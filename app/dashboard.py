@@ -191,8 +191,22 @@ function tiles(c, chamber){
   return `
   <div class="tile"><div class="lbl">Democratic control</div><div class="big ${lead?"dem":""}">${pct(demP)}</div></div>
   <div class="tile"><div class="lbl">Republican control</div><div class="big ${lead?"":"rep"}">${pct(1-demP)}</div></div>
-  <div class="tile"><div class="lbl">Median Dem seats</div><div class="big mono">${c.median_democratic_seats}</div><div class="det">80%: ${c.interval_80[0]}–${c.interval_80[1]} · 95%: ${c.interval_95[0]}–${c.interval_95[1]}</div></div>
-  <div class="tile"><div class="lbl">Tipping point</div><div class="big" style="font-size:1rem;padding-top:.35rem">${esc(c.tipping_point||"—")}</div><div class="det">${c.simulations.toLocaleString()} sims, shared national shock</div></div>`;
+  <div class="tile"><div class="lbl">Most likely Dem seats</div><div class="big mono">${c.most_likely_democratic_seats ?? c.median_democratic_seats}</div><div class="det">median ${c.median_democratic_seats} · 80%: ${c.interval_80[0]}–${c.interval_80[1]} · 95%: ${c.interval_95[0]}–${c.interval_95[1]}</div></div>
+  <div class="tile"><div class="lbl">Tipping point</div><div class="big" style="font-size:1rem;padding-top:.35rem">${esc(prettyRace(c.tipping_point))}</div><div class="det">the seat that decides the majority</div></div>`;
+}
+
+// "2026-senate-ME" -> "Maine Senate"; "2026-house-MI-10" -> "Michigan 10th"
+const STATE_NAMES={AL:"Alabama",AK:"Alaska",AZ:"Arizona",AR:"Arkansas",CA:"California",CO:"Colorado",CT:"Connecticut",DE:"Delaware",FL:"Florida",GA:"Georgia",HI:"Hawaii",ID:"Idaho",IL:"Illinois",IN:"Indiana",IA:"Iowa",KS:"Kansas",KY:"Kentucky",LA:"Louisiana",ME:"Maine",MD:"Maryland",MA:"Massachusetts",MI:"Michigan",MN:"Minnesota",MS:"Mississippi",MO:"Missouri",MT:"Montana",NE:"Nebraska",NV:"Nevada",NH:"New Hampshire",NJ:"New Jersey",NM:"New Mexico",NY:"New York",NC:"North Carolina",ND:"North Dakota",OH:"Ohio",OK:"Oklahoma",OR:"Oregon",PA:"Pennsylvania",RI:"Rhode Island",SC:"South Carolina",SD:"South Dakota",TN:"Tennessee",TX:"Texas",UT:"Utah",VT:"Vermont",VA:"Virginia",WA:"Washington",WV:"West Virginia",WI:"Wisconsin",WY:"Wyoming"};
+function prettyRace(id){
+  if(!id) return "—";
+  const p=String(id).split("-");
+  if(p.length<3) return id;
+  const st=STATE_NAMES[p[2]]||p[2];
+  const special=String(id).endsWith("-special")?" (special)":"";
+  if(p[1]==="senate") return `${st} Senate${special}`;
+  const d=p[3]?String(parseInt(p[3],10)):"";
+  const suf=d.endsWith("1")&&d!=="11"?"st":d.endsWith("2")&&d!=="12"?"nd":d.endsWith("3")&&d!=="13"?"rd":"th";
+  return d?`${st} ${d}${suf}`:st;
 }
 
 function probCell(f){

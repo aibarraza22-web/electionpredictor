@@ -50,3 +50,17 @@ def test_control_probability_and_seat_bounds():
     assert 0.0 <= sim["democratic_control_probability"] <= 1.0
     lo, hi = sim["interval_80"]
     assert lo <= sim["median_democratic_seats"] <= hi
+
+
+def test_smoothed_mode_is_stable_and_reported():
+    """The headline 'most likely' seat count is the smoothed peak, not the raw
+    argmax: the raw mode moves several seats between runs on simulation noise
+    alone, so it must not be the number shown to users."""
+    margins = [40 - 2 * i for i in range(220)]
+    a = simulate_control(_races(margins), "house", simulations=6000, seed=1)
+    b = simulate_control(_races(margins), "house", simulations=6000, seed=99)
+    assert "most_likely_democratic_seats" in a and "modal_democratic_seats_raw" in a
+    # smoothed peak is stable across independent simulation seeds
+    assert abs(a["most_likely_democratic_seats"] - b["most_likely_democratic_seats"]) <= 2
+    lo, hi = a["interval_80"]
+    assert lo <= a["most_likely_democratic_seats"] <= hi

@@ -427,12 +427,16 @@ RESEARCH_CLAIMS = [
                    "small polled-only training set the full tier uses.",
      "decision": "Reverted both. Lesson recorded: candidate changes MUST be evaluated against the "
                  "production architecture, not a simplified stand-in -- a weaker baseline "
-                 "manufactures gains that vanish on deployment. ONE GENUINE OPEN LEAD SURVIVES: "
-                 "under identical production tier routing, GBM beats ridge for the SENATE only "
-                 "(all 0.9065->0.9101, polled 0.9014->0.9249, Brier 0.0698->0.0647). Not shipped "
-                 "yet: it needs per-cycle robustness checks and would add scikit-learn/numpy, "
-                 "which must go in a pipeline-only requirements file to keep the Vercel serverless "
-                 "bundle lean (the API never fits models, it reads stored forecasts).",
+                 "manufactures gains that vanish on deployment. FOLLOW-UP (resolved): the "
+                 "apparent Senate GBM edge was then put through the same per-cycle gate that "
+                 "killed the finance and polls-only hypotheses, and FAILED it. Against production "
+                 "ridge with no incumbency features, Senate GBM is identical overall (0.9137 vs "
+                 "0.9137; improved 2 cycles, worse 3, tied 3) and its polled-race edge "
+                 "(0.9155->0.9249) is a coin flip -- better in 2012/2014, worse in 2016/2022. "
+                 "House GBM is plainly worse (0.9319->0.9232; worse in 6 of 8 cycles, -18 seats "
+                 "in 2010). Part of the earlier Senate edge was interaction with the incumbency "
+                 "features, which are themselves rejected. Gradient boosting is therefore NOT "
+                 "adopted, and scikit-learn/numpy stay out of the dependency set entirely.",
      "source": "User push to significantly improve accuracy with an open network"},
     {"id": "T-001", "claim": "The median of the simulated seat distribution is the best single "
                              "topline number; the mode and 'average of the top few outcomes' "

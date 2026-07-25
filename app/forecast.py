@@ -185,6 +185,36 @@ RESEARCH_CLAIMS = [
                  "and would still be bounded by the irreducible floor. Documented rather than "
                  "chased, per the no-post-hoc-fitting rule.",
      "source": "User push to raise toss-up accuracy; this project's backtests"},
+    {"id": "P-005", "claim": "REJECTED: campaign-finance receipts disparity, tested for real with "
+                             "historical FEC data, does NOT improve competitive-race accuracy -- "
+                             "it makes it worse.",
+     "chamber": "house", "metric": "walk-forward winner accuracy on polled races with real FEC "
+                                   "finance data, 2012-2022",
+     "mechanism": "The environment's network policy opened mid-session (Harvard Dataverse and the "
+                  "FEC API both became reachable), so this hypothesis -- previously blocked -- "
+                  "could finally be tested with real data instead of reasoned about",
+     "status": "Rejected",
+     "validation": "Pulled real historical FEC candidate-totals (api.open.fec.gov, DEMO_KEY, "
+                   "House 2012-2022, ~12,000 candidate-cycle rows) and computed each race's "
+                   "receipts disparity. Tested three ways, all walk-forward, all on the SAME "
+                   "polled-race subset: (1) directional agreement on the model's own wrong calls "
+                   "looked promising (68% of 96 misses, robust 71%/71%/71% across 2012/2016/2018, "
+                   "though a 50% outlier in 2014); (2) blending finance into the prediction at "
+                   "every weight from 0.05 to 0.50 made accuracy WORSE than not using it at all "
+                   "(0.8085 -> as low as 0.7319, monotonically worse with more weight); (3) adding "
+                   "finance as a genuine ridge-fit feature (not a hand-picked weight) also hurt "
+                   "(0.8165 -> 0.7984). Explained: finance correlates with actual outcome at only "
+                   "0.23 vs polls' 0.75, and is not simply redundant with polls (their mutual "
+                   "correlation is only 0.19) -- it is an independently WEAK, noisy signal, and "
+                   "ridge cannot extract a stable coefficient from it on this sample size.",
+     "decision": "Do not add finance as a model input. Directional agreement on hindsight misses "
+                 "is not sufficient evidence -- (2) and (3) are what determine whether a feature "
+                 "earns its place, and finance fails both. Senate was not independently tested "
+                 "(FEC's DEMO_KEY rate limit did not allow pulling Senate cycles in this session), "
+                 "but the same mechanism (weak marginal correlation once polls are known) is not "
+                 "House-specific and is unlikely to reverse for Senate.",
+     "source": "User challenge to use 'insane amounts of data' to raise toss-up accuracy; tested "
+               "for real once the network policy allowed it, rather than assumed blocked"},
     {"id": "N-002", "claim": "FIXED BUG: the control simulation's shared national-shock size "
                              "was a hardcoded constant (3.5pts), understating real cycle-to-"
                              "cycle correlated error and producing false aggregate certainty.",

@@ -110,3 +110,40 @@ def test_csv_results_importer(tmp_path, temp_db):
     rows = store.all_results()
     house = next(r for r in rows if r["chamber"] == "house")
     assert house["seat_key"] == "house-OH-01" and house["winner_party"] == "D"
+
+
+def test_votehub_attaches_senate_and_house_polls_to_seats():
+    """Regression: VoteHub types congressional polls 'us-senator' /
+    'us-representative', but the adapter matched on 'senate'/'house', so every
+    per-race poll was silently dropped and the 2026 races had NO polling at
+    all -- only the generic ballot, which attaches to no seat."""
+    from app.ingest import votehub
+    index = {"senate-MI": [("james", "REP"), ("elsayed", "DEM")],
+             "house-AK-01": [("begich", "REP"), ("peltola", "DEM")]}
+    senate_poll = {"poll_type": "us-senator", "subject": "2026 Michigan",
+                   "end_date": "2026-07-01", "state": None, "id": "s1",
+                   "answers": [{"choice": "Abdul El-Sayed", "pct": 45.0},
+                               {"choice": "John James", "pct": 43.0}]}
+    row = votehub._normalize(senate_poll, index)
+    assert row and row["seat_key"] == "senate-MI" and row["chamber"] == "senate"
+    assert row["dem_margin"] == 2.0  # D 45 - R 43, party resolved via FEC index
+
+    house_poll = {"poll_type": "us-representative", "seat_name": "AK-01",
+                  "subject": "2026 Alaska", "end_date": "2026-07-01", "id": "h1",
+                  "answers": [{"choice": "Nick Begich III", "pct": 46.0},
+                              {"choice": "Mary Peltola", "pct": 49.0}]}
+    row = votehub._normalize(house_poll, index)
+    assert row and row["seat_key"] == "house-AK-01" and row["dem_margin"] == 3.0
+
+    # a PRIMARY (two Democrats) must be skipped, not mis-read as a general
+    primary = {"poll_type": "us-senator", "subject": "2026 Texas Democratic",
+               "end_date": "2026-07-01", "id": "p1",
+               "answers": [{"choice": "Jasmine Crockett", "pct": 38.0},
+                           {"choice": "James Talarico", "pct": 37.0}]}
+    assert votehub._normalize(primary, index) is None
+    # unknown candidates must be skipped rather than guessed
+    unknown = {"poll_type": "us-senator", "subject": "2026 Michigan",
+               "end_date": "2026-07-01", "id": "u1",
+               "answers": [{"choice": "Someone Unlisted", "pct": 40.0},
+                           {"choice": "Other Person", "pct": 40.0}]}
+    assert votehub._normalize(unknown, index) is None

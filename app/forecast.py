@@ -27,7 +27,7 @@ CYCLE = 2026
 # snapshots are immutable per (race_id, as_of, model_version): a same-day
 # rerun under an unchanged version keeps the day's first frozen numbers, so a
 # real prediction-affecting change must bump the version to surface.
-MODEL_VERSION = "2026.14"
+MODEL_VERSION = "2026.15"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {
@@ -483,6 +483,33 @@ RESEARCH_CLAIMS = [
                  "unchanged -- this only affects the margin -> probability mapping. Regression "
                  "test asserts safe seats sharpen without the favoured side ever flipping.",
      "source": "User report that Senate margins/ratings were way off"},
+    {"id": "D-001", "claim": "FIXED BUG: no 2026 race had ANY polling -- every per-race poll was "
+                             "being silently discarded, capping every race at data grade C.",
+     "chamber": "both", "metric": "coverage.with_polls; per-race quality grade",
+     "mechanism": "VoteHub labels congressional polls 'us-senator' / 'us-representative', but the "
+                  "adapter matched on 'senate' / 'house' and queried invented poll_type values, "
+                  "so only the generic ballot survived -- and that attaches to no seat",
+     "status": "Production",
+     "validation": "Live coverage read with_polls: 0 across all 470 races despite 533 stored poll "
+                   "records. Diagnosed against the live API: of 5,378 polls, 295 are us-senator "
+                   "and 59 us-representative, and ALL were dropped. Two further obstacles were "
+                   "real: VoteHub candidate polls carry no party labels (only names and "
+                   "percentages), and Senate polls carry no state (it is in the subject line). "
+                   "Fixed by resolving party from the FEC candidate registry by surname within "
+                   "the seat, requiring exactly one Democrat and one Republican -- which also "
+                   "excludes primaries (60 of them) rather than misreading a D-vs-D matchup as a "
+                   "general election. Verified end to end with a complete index: 211 of 295 "
+                   "Senate polls attach across 16 seats (MI 39, ME 31, TX 26, NC 22, NH 16, ...) "
+                   "plus House seats via seat_name. Unresolvable polls are skipped, never "
+                   "guessed.",
+     "decision": "votehub adapter rewritten: single unfiltered fetch, seat attribution for both "
+                 "chambers, FEC-backed party resolution with a time budget so a throttled "
+                 "registry walk degrades to fewer attached polls rather than a hung pipeline. "
+                 "quality_grade also now receives REAL finance coverage instead of a hardcoded "
+                 "False. Effect on grades: a seat with 4+ polls reaches A, 2-3 polls B, and 1 "
+                 "poll plus finance B. Races that genuinely have no polling stay at C -- that is "
+                 "the honest reading, and the fix is more polls, not a looser scale.",
+     "source": "User: more races should reach data grades B and A"},
     {"id": "T-003", "claim": "FIXED INCONSISTENCY: the headline seat count disagreed with the "
                              "race list, and the simulation had drifted away from the published "
                              "per-race probabilities.",
@@ -686,6 +713,9 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
         chamber_rows = [r for r in training if r.chamber == chamber]
         models[chamber] = MarginModel(**choice["kwargs"]).fit(chamber_rows)
 
+    # Seats with ingested campaign-finance rows for this cycle: a real input to
+    # the published data grade instead of a hardcoded False.
+    financed_seats = {row["seat_key"] for row in store.all_finance(CYCLE)}
     version = data_version(store.counts(), prefix)
     snapshots = []
     feature_meta = {}
@@ -696,7 +726,8 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
                         holder_party=race["incumbent_party"], state_lean=state_lean,
                         redraw_adjust=redraw_adjust)
         feature_rows[race["id"]] = row
-        payload = models[race["chamber"]].forecast_payload(row, race["id"])
+        payload = models[race["chamber"]].forecast_payload(
+            row, race["id"], finance_fresh=race["seat_key"] in financed_seats)
         payload.update({"as_of": as_of, "model_version": MODEL_VERSION,
                         "data_version": version})
         snapshots.append(payload)

@@ -113,6 +113,13 @@ def all_incumbents(cycle: int) -> dict[str, dict]:
     return {r.seat_key: dict(r._mapping) for r in rows}
 
 
+def all_finance(cycle: int) -> list[dict]:
+    """Every finance row for a cycle (used for data-grade coverage)."""
+    t = db.finance
+    with db.get_engine().connect() as c:
+        return [dict(r._mapping) for r in c.execute(select(t).where(t.c.cycle == cycle))]
+
+
 def finance_for_seat(seat_key: str, cycle: int) -> list[dict]:
     t = db.finance
     with db.get_engine().connect() as c:

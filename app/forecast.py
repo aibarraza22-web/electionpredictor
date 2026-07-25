@@ -18,13 +18,16 @@ from .model import MarginModel
 from .simulation import simulate_control
 
 CYCLE = 2026
-# 2026.10: first version trained on REAL Senate returns (data/vintage/
-# medsl_us_senate_2004_2024.csv) instead of the synthetic fallback, and with
-# the widened empirical champion grid (House -> l2=1). Bumped because forecast
-# snapshots are immutable per (race_id, as_of, model_version): without a new
-# version, a same-day rerun keeps the numbers frozen from the day's first run,
-# so the real-Senate-data change would not surface until the version changed.
-MODEL_VERSION = "2026.10"
+# 2026.11: full 1976-2024 Senate history from the official single-source
+# Dataverse file (was a 2004-2024 two-source reconstruction), champion
+# selection scored on recent cycles only (CHAMPION_SCORING_SINCE=2010), and
+# the poll-blend/toss-up-ceiling investigations (P-002, P-004) which found no
+# further change to make. Net: Senate winner accuracy 0.872 -> 0.893 on a
+# fixed 2010-2024 walk-forward. Bumped (over 2026.10) because forecast
+# snapshots are immutable per (race_id, as_of, model_version): a same-day
+# rerun under an unchanged version keeps the day's first frozen numbers, so a
+# real prediction-affecting change must bump the version to surface.
+MODEL_VERSION = "2026.11"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {

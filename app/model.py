@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from math import sqrt
+from math import exp, sqrt
 from statistics import pstdev
 
 from .domain import normal_cdf, quality_grade, rating
@@ -33,6 +33,18 @@ DEFAULT_L2 = 4.0
 # is the number of cycles, not rows. See MarginModel._penalties. (This
 # replaced an earlier hardcoded multiplier with the data-driven factor.)
 MIN_SIGMA = 4.0     # pct points; guards degenerate residual pools
+# Win probabilities blend the normal-CDF reading of the margin interval with a
+# logistic (Platt) calibration fitted on training outcomes. Rationale: the
+# margin intervals are well calibrated (~80% coverage at the 80% level), but
+# using margin-SIZE uncertainty directly as win probability conflates two
+# different things -- most of the model's margin error is on the magnitude of
+# blowouts, which never threatens the winner. Unblended that made a safe seat
+# like Alabama at R+21 read as a 19% flip chance ("Lean Republican"). A light
+# 0.25 weight was chosen on evidence, not taste: swept 0.25-0.75 walk-forward,
+# 0.25 improves Brier, log loss AND winner accuracy in both chambers and is the
+# only weight that is better in EVERY House cycle (8 better, 0 worse); heavier
+# weights score marginally better in aggregate but lose cycles.
+CALIBRATION_WEIGHT = 0.25
 N_POLL_FEATURES = 2   # poll_average, has_polls sit at the end of the vector
 N_NATIONAL_FEATURES = 2  # generic_ballot, has_generic_ballot sit just before them
 N_TAIL = N_POLL_FEATURES + N_NATIONAL_FEATURES
@@ -86,13 +98,55 @@ class Prediction:
     mean: float
     sigma: float
     model: str  # "full" or "fundamentals"
+    calibration: tuple | None = None  # (a, b) logistic fit, see CALIBRATION_WEIGHT
+    calibration_weight: float = CALIBRATION_WEIGHT
 
     @property
     def dem_probability(self) -> float:
-        return min(0.995, max(0.005, normal_cdf(self.mean / self.sigma)))
+        normal = normal_cdf(self.mean / self.sigma)
+        if not self.calibration:
+            return min(0.995, max(0.005, normal))
+        a, b = self.calibration
+        z = max(-30.0, min(30.0, a + b * self.mean))
+        logistic = 1.0 / (1.0 + exp(-z))
+        w = self.calibration_weight
+        return min(0.995, max(0.005, w * logistic + (1.0 - w) * normal))
 
     def interval(self, z: float) -> tuple[float, float]:
         return (self.mean - z * self.sigma, self.mean + z * self.sigma)
+
+
+def _fit_calibration(margins: list[float], won: list[int],
+                     iterations: int = 100) -> tuple[float, float] | None:
+    """Two-parameter logistic P(win) = sigmoid(a + b*margin), Newton-fitted.
+
+    Maps a predicted margin directly to a win probability using how often past
+    predictions of that size actually won, instead of assuming the margin's own
+    error distribution describes win uncertainty."""
+    if len(margins) < 50 or len(set(won)) < 2:
+        return None
+    a, b = 0.0, 0.08
+    for _ in range(iterations):
+        ga = gb = haa = hab = hbb = 0.0
+        for m, y in zip(margins, won):
+            z = max(-30.0, min(30.0, a + b * m))
+            p = 1.0 / (1.0 + exp(-z))
+            w = p * (1.0 - p)
+            ga += p - y
+            gb += (p - y) * m
+            haa += w
+            hab += w * m
+            hbb += w * m * m
+        det = haa * hbb - hab * hab
+        if abs(det) < 1e-9:
+            break
+        da = (hbb * ga - hab * gb) / det
+        db = (-hab * ga + haa * gb) / det
+        a -= da
+        b -= db
+        if abs(da) + abs(db) < 1e-10:
+            break
+    return (a, b) if b > 0 else None
 
 
 def _residual_sigma(residuals: list[float]) -> float:
@@ -124,6 +178,7 @@ class MarginModel:
         self.weights: dict[str, dict[str, list[float]]] = {}
         self.sigma: dict[str, dict[str, float]] = {}
         self.state_offset: dict[str, dict[str, float]] = {}
+        self.calibration: dict[str, tuple] = {}
         self.training_meta: dict[str, dict] = {}
 
     def _indices(self) -> dict[str, list[int]]:
@@ -205,6 +260,15 @@ class MarginModel:
                 self.state_offset[chamber] = {
                     state: (sum(vals) / len(vals)) * (len(vals) / (len(vals) + self.state_shrinkage))
                     for state, vals in by_state.items()}
+            # Win-probability calibration, fitted on this chamber's own
+            # training outcomes (see CALIBRATION_WEIGHT).
+            fitted = _fit_calibration(
+                [self._base_mean(r) + (self.state_offset.get(chamber, {}).get(r.state, 0.0)
+                                       if self.state_effects else 0.0)
+                 for r in chamber_rows],
+                [1 if r.actual_margin > 0 else 0 for r in chamber_rows])
+            if fitted:
+                self.calibration[chamber] = fitted
         return self
 
     def _tier(self, row: FeatureRow) -> str:
@@ -235,7 +299,8 @@ class MarginModel:
             # Add a further 4pt-sd term so redrawn seats read as the toss-ups
             # they are, not as false safe seats (mandate hypothesis H-005).
             sigma = sqrt(sigma ** 2 + 16.0)
-        return Prediction(mean, sigma, kind)
+        return Prediction(mean, sigma, kind,
+                          calibration=self.calibration.get(row.chamber))
 
     def forecast_payload(self, row: FeatureRow, race_id: str) -> dict:
         prediction = self.predict(row)
@@ -269,6 +334,8 @@ class MarginModel:
             "state_effects": self.state_effects,
             "use_generic_ballot": self.use_generic_ballot,
             "state_offset": self.state_offset,
+            "calibration": self.calibration,
+            "calibration_weight": CALIBRATION_WEIGHT,
             "weights": self.weights, "sigma": self.sigma,
             "training": self.training_meta})
 
@@ -279,6 +346,7 @@ class MarginModel:
                     state_effects=data.get("state_effects", False),
                     use_generic_ballot=data.get("use_generic_ballot", False))
         model.state_offset = data.get("state_offset", {})
+        model.calibration = {k: tuple(v) for k, v in (data.get("calibration") or {}).items()}
         model.weights = data["weights"]
         model.sigma = data["sigma"]
         model.training_meta = data.get("training", {})

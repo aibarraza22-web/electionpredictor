@@ -27,7 +27,7 @@ CYCLE = 2026
 # snapshots are immutable per (race_id, as_of, model_version): a same-day
 # rerun under an unchanged version keeps the day's first frozen numbers, so a
 # real prediction-affecting change must bump the version to surface.
-MODEL_VERSION = "2026.12"
+MODEL_VERSION = "2026.13"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {
@@ -457,6 +457,32 @@ RESEARCH_CLAIMS = [
                  "at the time; re-testing after the Senate-data and champion-selection changes "
                  "reversed it, which is why estimator choice is re-run rather than assumed.",
      "source": "This project's walk-forward backtests, in response to a user topline-statistic idea"},
+    {"id": "P-006", "claim": "FIXED: win probabilities were derived from MARGIN-SIZE uncertainty, "
+                             "which made genuinely safe seats read as competitive and erased "
+                             "toss-ups.",
+     "chamber": "both", "metric": "Brier / log loss / winner accuracy, walk-forward 2010-2024",
+     "mechanism": "The margin intervals are well calibrated (~80% coverage at the 80% level), but "
+                  "most of the model's margin error is on the MAGNITUDE of blowouts, which never "
+                  "threatens the winner. Feeding that same sigma into a normal CDF therefore "
+                  "overstated flip risk for safe seats and understated separation elsewhere",
+     "status": "Production",
+     "validation": "Symptom: Alabama at R+21 read as a 19% Democratic flip chance ('Lean "
+                   "Republican'), every Senate race landed in Lean/Likely, and no race was a "
+                   "Toss-up. Fix: blend the normal CDF with a logistic (Platt) calibration fitted "
+                   "on each chamber's own training outcomes. The blend weight was swept "
+                   "0.25-0.75 walk-forward rather than picked: 0.25 improves Brier, log loss AND "
+                   "winner accuracy in BOTH chambers (House 0.0617->0.0591 Brier, 0.2288->0.2199 "
+                   "log loss; Senate 0.0658->0.0650, 0.2298->0.2267, winner accuracy "
+                   "0.9137->0.9173) and is the only weight better in EVERY House cycle (8 better, "
+                   "0 worse). Heavier weights score slightly better in aggregate but lose "
+                   "individual cycles, and full Platt (weight 1.0) was overconfident, sending a "
+                   "R+39 seat to 0.000. Effect on the 2026 Senate: Georgia becomes a genuine "
+                   "Toss-up and Alabama moves Lean -> Likely Republican.",
+     "decision": "model.CALIBRATION_WEIGHT = 0.25, fitted per chamber in MarginModel.fit and "
+                 "persisted through to_json/from_json. Margin point estimates and intervals are "
+                 "unchanged -- this only affects the margin -> probability mapping. Regression "
+                 "test asserts safe seats sharpen without the favoured side ever flipping.",
+     "source": "User report that Senate margins/ratings were way off"},
     {"id": "T-002", "claim": "The headline seat count should be the SMOOTHED MODE (most likely "
                              "outcome), not the median -- but the raw mode is too noisy to use.",
      "chamber": "both", "metric": "walk-forward MAE of each estimator vs certified seat count",

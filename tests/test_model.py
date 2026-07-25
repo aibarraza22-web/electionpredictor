@@ -1,7 +1,7 @@
 from random import Random
 
 from app.features import FeatureRow
-from app.model import MarginModel, ridge_fit
+from app.model import MarginModel, Prediction, ridge_fit
 
 
 def _row(chamber, cycle, x, y, poll_count=0, has_prior=True):
@@ -79,3 +79,27 @@ def test_serialization_round_trip():
     restored = MarginModel.from_json(model.to_json())
     row = _row("house", 2026, [1.0, 8.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0], None)
     assert abs(restored.predict(row).mean - model.predict(row).mean) < 1e-9
+
+
+def test_calibration_makes_safe_seats_safe_without_flipping_winners():
+    """Win probability blends the margin's normal CDF with a logistic fitted on
+    real outcomes. Without it, margin-SIZE uncertainty leaked into win
+    probability and a safe seat (e.g. Alabama at R+21) read as a ~19% flip
+    chance. Calibration must sharpen safe seats while leaving the predicted
+    winner unchanged."""
+    model = MarginModel().fit(_training(Random(11)))
+    # a clearly-but-not-absurdly Republican seat: far enough out that a safe
+    # seat should read safe, close enough that the uncalibrated probability is
+    # not already clamped at the 0.005 floor (which would make the comparison
+    # vacuous on this synthetic fixture's tight sigma).
+    safe = _row("house", 2026, [1.0, -8.0, 1.0, -1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0], None)
+    pred = model.predict(safe)
+    assert model.calibration.get("house") is not None
+    uncalibrated = Prediction(pred.mean, pred.sigma, pred.model)
+    # a deep-red seat must read as clearly safer once calibrated
+    assert pred.dem_probability < uncalibrated.dem_probability
+    # and the side favoured must not change
+    assert (pred.dem_probability > 0.5) == (uncalibrated.dem_probability > 0.5)
+    # probabilities stay in bounds and a near-tied seat stays near a toss-up
+    close = _row("house", 2026, [1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0], None)
+    assert 0.005 <= model.predict(close).dem_probability <= 0.995

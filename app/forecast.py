@@ -403,6 +403,37 @@ RESEARCH_CLAIMS = [
                  "state-effects at two shrinkage levels so the choice is empirical (House now "
                  "picks l2=1). Do not add features that don't earn their place out of sample.",
      "source": "User request to go deep on the House model"},
+    {"id": "M-003", "claim": "REJECTED (House) / OPEN LEAD (Senate): incumbency-status features "
+                             "and gradient boosting. Also a METHODOLOGY correction: a simplified "
+                             "test harness manufactured illusory gains.",
+     "chamber": "both", "metric": "walk-forward winner accuracy under the PRODUCTION tier routing",
+     "mechanism": "Open seats lose the incumbent's personal vote (real effect: mean |actual - "
+                  "prior| is 20.9pts open vs 17.2 incumbent-defended); and a nonlinear learner "
+                  "can capture interactions ridge cannot",
+     "status": "Rejected",
+     "validation": "Derived real incumbent-running/open-seat status for 10,349 House and 744 "
+                   "Senate seat-cycles from MEDSL candidate names (the sitting member's presence "
+                   "on the ballot is a pre-election fact, so it is vintage-safe). In a SIMPLIFIED "
+                   "harness (single pooled ridge over core+poll features) both the incumbency "
+                   "features and a GradientBoostingRegressor looked like large wins -- incumbency "
+                   "improved and was never worse in ANY cycle, and GBM lifted Senate 0.860->0.914. "
+                   "Re-tested through the REAL model architecture (separate core/full tier fits, "
+                   "full tier trained only on polled rows) BOTH collapsed: incumbency made things "
+                   "slightly worse (House polled 0.8183->0.8154, Senate polled 0.9155->0.9014), "
+                   "and GBM hurt the House (0.9313->0.9224). ROOT CAUSE: the harness's pooled fit "
+                   "was a WEAKER baseline than production (its Senate ridge scored 0.860 where "
+                   "production scores 0.914), so both changes were mostly compensating for the "
+                   "harness, not beating the real model. The extra features also overfit the "
+                   "small polled-only training set the full tier uses.",
+     "decision": "Reverted both. Lesson recorded: candidate changes MUST be evaluated against the "
+                 "production architecture, not a simplified stand-in -- a weaker baseline "
+                 "manufactures gains that vanish on deployment. ONE GENUINE OPEN LEAD SURVIVES: "
+                 "under identical production tier routing, GBM beats ridge for the SENATE only "
+                 "(all 0.9065->0.9101, polled 0.9014->0.9249, Brier 0.0698->0.0647). Not shipped "
+                 "yet: it needs per-cycle robustness checks and would add scikit-learn/numpy, "
+                 "which must go in a pipeline-only requirements file to keep the Vercel serverless "
+                 "bundle lean (the API never fits models, it reads stored forecasts).",
+     "source": "User push to significantly improve accuracy with an open network"},
     {"id": "T-001", "claim": "The median of the simulated seat distribution is the best single "
                              "topline number; the mode and 'average of the top few outcomes' "
                              "are not improvements.",

@@ -157,6 +157,41 @@ def insert_forecasts(rows: Sequence[dict]) -> int:
     return insert_rows("forecasts", rows)
 
 
+def latest_champion_version(fallback: str | None = None) -> str | None:
+    """Newest champion model version actually present in ``forecasts``.
+
+    The API must not pin reads to a compile-time constant: the pipeline
+    (GitHub Actions, running the latest default branch) writes snapshots under
+    whatever MODEL_VERSION its checkout has, while the deployed serverless app
+    may still be running an older build. When those disagree the app queries a
+    version the pipeline has moved past and silently serves stale numbers --
+    the site appears frozen even though fresh forecasts exist. Resolving the
+    version from the data instead makes new pipeline output surface without
+    waiting on a redeploy.
+
+    Baseline/challenger rows are excluded; among champion rows the most recent
+    ``as_of`` wins, with a numeric (not lexicographic -- 2026.9 < 2026.11)
+    version comparison as the tie-break.
+    """
+    f = db.forecasts
+    with db.get_engine().connect() as c:
+        rows = c.execute(
+            select(f.c.model_version, func.max(f.c.as_of).label("as_of"))
+            .group_by(f.c.model_version)).fetchall()
+    champions = [r for r in rows
+                 if not str(r.model_version).startswith(("baseline", "challenger"))]
+    if not champions:
+        return fallback
+
+    def sort_key(row):
+        parts = []
+        for piece in str(row.model_version).split("."):
+            parts.append(int(piece) if piece.isdigit() else 0)
+        return (row.as_of or "", parts)
+
+    return max(champions, key=sort_key).model_version
+
+
 def latest_forecasts(chamber: str | None = None,
                      model_version: str | None = None) -> list[dict]:
     """All snapshots from the most recent as_of date (optionally one model)."""

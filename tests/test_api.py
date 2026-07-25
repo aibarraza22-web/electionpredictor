@@ -114,3 +114,21 @@ def test_scenario_shifts_control(client):
     blue = client.post("/api/scenarios", json={"national_environment": 8}).json()
     assert blue["house"]["democratic_control_probability"] >= \
         neutral["house"]["democratic_control_probability"]
+
+
+def test_latest_champion_version_resolves_numerically_and_skips_baselines(temp_db):
+    """The API resolves the champion version from stored data, so pipeline
+    output surfaces without a redeploy. Ordering must be numeric: plain string
+    comparison would rank '2026.9' above '2026.11'."""
+    from app import store
+    rows = []
+    for version, as_of in (("2026.9", "2026-07-01"), ("2026.11", "2026-07-02"),
+                           ("baseline-prior-result", "2026-07-03"),
+                           ("challenger-state-effects", "2026-07-03")):
+        rows.append({
+            "race_id": "2026-house-OH-01", "as_of": as_of, "model_version": version,
+            "data_version": "test", "dem_probability": 0.5, "margin": 0.0,
+            "low80": -1.0, "high80": 1.0, "low95": -2.0, "high95": 2.0,
+            "rating": "Toss-up", "quality": "C", "components": "{}"})
+    store.insert_forecasts(rows)
+    assert store.latest_champion_version() == "2026.11"

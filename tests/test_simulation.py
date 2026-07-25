@@ -64,3 +64,27 @@ def test_smoothed_mode_is_stable_and_reported():
     assert abs(a["most_likely_democratic_seats"] - b["most_likely_democratic_seats"]) <= 2
     lo, hi = a["interval_80"]
     assert lo <= a["most_likely_democratic_seats"] <= hi
+
+
+def test_headline_matches_race_list_for_house_and_simulation_stays_consistent():
+    """Two guarantees users can check by hand:
+    1. the House headline equals the number of races the party is favoured in,
+       so counting the race list reproduces the topline exactly; and
+    2. the simulated mean equals the sum of the published per-race
+       probabilities, so the distribution cannot drift away from the ratings.
+    """
+    margins = [30 - 1.5 * i for i in range(60)]
+    races = []
+    for i, m in enumerate(margins):
+        races.append({"race_id": f"r{i}", "margin": m, "high80": m + 18, "low80": m - 18,
+                      "dem_probability": max(0.006, min(0.994, 0.5 + m / 90))})
+    house = simulate_control(races, "house", simulations=8000)
+    favored = sum(1 for r in races if r["dem_probability"] > 0.5)
+    assert house["favored_democratic_seats"] == favored
+    assert house["headline_democratic_seats"] == favored  # House: count of favourites
+    # simulated mean tracks the sum of published probabilities
+    assert abs(house["expected_democratic_seats"] - sum(r["dem_probability"] for r in races)) < 1.5
+    # Senate uses the simulated peak instead (too few races for a stable count)
+    senate = simulate_control(races, "senate", simulations=8000, base_dem_seats=34)
+    assert senate["headline_democratic_seats"] == senate["most_likely_democratic_seats"]
+    assert senate["favored_democratic_seats"] == 34 + favored

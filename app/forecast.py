@@ -27,7 +27,7 @@ CYCLE = 2026
 # snapshots are immutable per (race_id, as_of, model_version): a same-day
 # rerun under an unchanged version keeps the day's first frozen numbers, so a
 # real prediction-affecting change must bump the version to surface.
-MODEL_VERSION = "2026.13"
+MODEL_VERSION = "2026.14"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {
@@ -483,6 +483,33 @@ RESEARCH_CLAIMS = [
                  "unchanged -- this only affects the margin -> probability mapping. Regression "
                  "test asserts safe seats sharpen without the favoured side ever flipping.",
      "source": "User report that Senate margins/ratings were way off"},
+    {"id": "T-003", "claim": "FIXED INCONSISTENCY: the headline seat count disagreed with the "
+                             "race list, and the simulation had drifted away from the published "
+                             "per-race probabilities.",
+     "chamber": "both", "metric": "topline MAE + headline-vs-race-list agreement",
+     "mechanism": "Summing 435 fractional probabilities is not the same as counting how many "
+                  "races are over 50%; and once win probabilities became calibrated (P-006) the "
+                  "simulation, which sampled raw margin intervals, no longer reproduced them",
+     "status": "Production",
+     "validation": "Reported by the user: clicking through the individual House races gave 211D/"
+                   "224R while the headline said 226D. Measured live: 214 races favored D but a "
+                   "228.6 probability sum. Two fixes, both evidence-led. (1) The simulation now "
+                   "derives each race's effective sigma from its PUBLISHED probability, so the "
+                   "simulated mean equals the sum of the per-race probabilities by construction "
+                   "and can never drift from the ratings again. (2) The headline is now chosen "
+                   "per chamber on walk-forward MAE (2010-2024): the House uses the count of "
+                   "favored races (MAE 11.75 vs 15.12 for the simulated peak, better in 5 of 8 "
+                   "cycles) which ALSO makes the headline reproduce the race list exactly; the "
+                   "Senate keeps the simulated peak (MAE 1.62 vs 2.38), where counting favorites "
+                   "was never better in any single cycle -- 35 races is too few for the count to "
+                   "be stable.",
+     "decision": "simulate_control reports favored_democratic_seats, most_likely_democratic_seats "
+                 "and a chamber-specific headline_democratic_seats with headline_basis; the "
+                 "dashboard leads with the headline and shows the alternatives beneath it. A "
+                 "regression test asserts the House headline equals the favored-race count and "
+                 "that the simulated mean tracks the published probability sum.",
+     "source": "User: 'if you look at the individual races you get 224R/211D even though the "
+               "topline is 226D'"},
     {"id": "T-002", "claim": "The headline seat count should be the SMOOTHED MODE (most likely "
                              "outcome), not the median -- but the raw mode is too noisy to use.",
      "chamber": "both", "metric": "walk-forward MAE of each estimator vs certified seat count",

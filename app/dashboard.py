@@ -191,7 +191,7 @@ function tiles(c, chamber){
   return `
   <div class="tile"><div class="lbl">Democratic control</div><div class="big ${lead?"dem":""}">${pct(demP)}</div></div>
   <div class="tile"><div class="lbl">Republican control</div><div class="big ${lead?"":"rep"}">${pct(1-demP)}</div></div>
-  <div class="tile"><div class="lbl">Most likely Dem seats</div><div class="big mono">${c.most_likely_democratic_seats ?? c.median_democratic_seats}</div><div class="det">median ${c.median_democratic_seats} · 80%: ${c.interval_80[0]}–${c.interval_80[1]} · 95%: ${c.interval_95[0]}–${c.interval_95[1]}</div></div>
+  <div class="tile"><div class="lbl">Dem seats <small class="muted">${esc(c.headline_basis||"most likely")}</small></div><div class="big mono">${c.headline_democratic_seats ?? c.most_likely_democratic_seats ?? c.median_democratic_seats}</div><div class="det">favored ${c.favored_democratic_seats ?? "—"} · most likely ${c.most_likely_democratic_seats ?? "—"} · median ${c.median_democratic_seats}<br>80%: ${c.interval_80[0]}–${c.interval_80[1]} · 95%: ${c.interval_95[0]}–${c.interval_95[1]}</div></div>
   <div class="tile"><div class="lbl">Tipping point</div><div class="big" style="font-size:1rem;padding-top:.35rem">${esc(prettyRace(c.tipping_point))}</div><div class="det">the seat that decides the majority</div></div>`;
 }
 

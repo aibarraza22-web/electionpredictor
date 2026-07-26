@@ -153,13 +153,22 @@ def test_votehub_attaches_senate_and_house_polls_to_seats():
     assert votehub._normalize(unknown, index) is None
 
 
-def test_votehub_quality_gate_and_special_election_seats():
+def test_votehub_quality_gate_and_special_election_seats(temp_db):
     """Polls must be independent, adequately sampled and reasonably fresh --
     and must attach to the seat actually on the 2026 ballot. Ohio's and
     Florida's 2026 Senate contests are SPECIAL elections, so mapping their
     polls to 'senate-OH' pointed them at a race that does not exist."""
     from datetime import date, timedelta
+    from app import store
     from app.ingest import votehub
+    store.insert_rows("incumbents", [
+        {"cycle": votehub.CYCLE, "chamber": "senate", "state": "OH", "district": None,
+         "seat_key": "senate-OH-special", "party": "R", "name": "Test Senator",
+         "source": "test"},
+        {"cycle": votehub.CYCLE, "chamber": "senate", "state": "MI", "district": None,
+         "seat_key": "senate-MI", "party": "D", "name": "Test Senator MI",
+         "source": "test"},
+    ])
     fresh = (date.today() - timedelta(days=10)).isoformat()
     base = {"poll_type": "us-senator", "subject": "2026 Michigan", "id": "x",
             "end_date": fresh, "sample_size": 800, "population": "lv",

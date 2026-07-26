@@ -1,3 +1,4 @@
+import datetime as _dt
 import textwrap
 
 from app.ingest import csv_results, fte_polls, legislators, medsl
@@ -120,8 +121,10 @@ def test_votehub_attaches_senate_and_house_polls_to_seats():
     from app.ingest import votehub
     index = {"senate-MI": [("james", "REP"), ("elsayed", "DEM")],
              "house-AK-01": [("begich", "REP"), ("peltola", "DEM")]}
+    fresh = (_dt.date.today() - _dt.timedelta(days=5)).isoformat()
     senate_poll = {"poll_type": "us-senator", "subject": "2026 Michigan",
-                   "end_date": "2026-07-01", "state": None, "id": "s1",
+                   "end_date": fresh, "state": None, "id": "s1",
+                   "sample_size": 800, "population": "lv",
                    "answers": [{"choice": "Abdul El-Sayed", "pct": 45.0},
                                {"choice": "John James", "pct": 43.0}]}
     row = votehub._normalize(senate_poll, index)
@@ -129,7 +132,8 @@ def test_votehub_attaches_senate_and_house_polls_to_seats():
     assert row["dem_margin"] == 2.0  # D 45 - R 43, party resolved via FEC index
 
     house_poll = {"poll_type": "us-representative", "seat_name": "AK-01",
-                  "subject": "2026 Alaska", "end_date": "2026-07-01", "id": "h1",
+                  "subject": "2026 Alaska", "end_date": fresh, "id": "h1",
+                  "sample_size": 800, "population": "lv",
                   "answers": [{"choice": "Nick Begich III", "pct": 46.0},
                               {"choice": "Mary Peltola", "pct": 49.0}]}
     row = votehub._normalize(house_poll, index)
@@ -137,13 +141,42 @@ def test_votehub_attaches_senate_and_house_polls_to_seats():
 
     # a PRIMARY (two Democrats) must be skipped, not mis-read as a general
     primary = {"poll_type": "us-senator", "subject": "2026 Texas Democratic",
-               "end_date": "2026-07-01", "id": "p1",
+               "end_date": fresh, "id": "p1", "sample_size": 800, "population": "lv",
                "answers": [{"choice": "Jasmine Crockett", "pct": 38.0},
                            {"choice": "James Talarico", "pct": 37.0}]}
     assert votehub._normalize(primary, index) is None
     # unknown candidates must be skipped rather than guessed
     unknown = {"poll_type": "us-senator", "subject": "2026 Michigan",
-               "end_date": "2026-07-01", "id": "u1",
+               "end_date": fresh, "id": "u1", "sample_size": 800, "population": "lv",
                "answers": [{"choice": "Someone Unlisted", "pct": 40.0},
                            {"choice": "Other Person", "pct": 40.0}]}
     assert votehub._normalize(unknown, index) is None
+
+
+def test_votehub_quality_gate_and_special_election_seats():
+    """Polls must be independent, adequately sampled and reasonably fresh --
+    and must attach to the seat actually on the 2026 ballot. Ohio's and
+    Florida's 2026 Senate contests are SPECIAL elections, so mapping their
+    polls to 'senate-OH' pointed them at a race that does not exist."""
+    from datetime import date, timedelta
+    from app.ingest import votehub
+    fresh = (date.today() - timedelta(days=10)).isoformat()
+    base = {"poll_type": "us-senator", "subject": "2026 Michigan", "id": "x",
+            "end_date": fresh, "sample_size": 800, "population": "lv",
+            "answers": [{"choice": "Abdul El-Sayed", "pct": 45.0},
+                        {"choice": "John James", "pct": 43.0}]}
+    index = {"senate-MI": [("james", "REP"), ("elsayed", "DEM")]}
+    assert votehub._normalize(dict(base), index) is not None       # clean poll kept
+
+    # party-sponsored, tiny-sample, all-adult and stale polls are all rejected
+    assert votehub._quality_reject({**base, "partisan": "DEM"}, fresh) == "partisan"
+    assert votehub._quality_reject({**base, "internal": True}, fresh) == "internal"
+    assert votehub._quality_reject({**base, "sample_size": 120}, fresh) == "sample_size"
+    assert votehub._quality_reject({**base, "population": "a"}, fresh) == "population"
+    old = (date.today() - timedelta(days=400)).isoformat()
+    assert votehub._quality_reject(base, old) == "stale"
+    assert votehub._quality_reject(base, fresh) is None
+
+    # Ohio 2026 is a special election, so that is where its polls belong
+    assert votehub._senate_seat_for_state("OH") == "senate-OH-special"
+    assert votehub._senate_seat_for_state("MI") == "senate-MI"

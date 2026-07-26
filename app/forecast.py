@@ -27,7 +27,7 @@ CYCLE = 2026
 # snapshots are immutable per (race_id, as_of, model_version): a same-day
 # rerun under an unchanged version keeps the day's first frozen numbers, so a
 # real prediction-affecting change must bump the version to surface.
-MODEL_VERSION = "2026.15"
+MODEL_VERSION = "2026.16"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {
@@ -510,6 +510,31 @@ RESEARCH_CLAIMS = [
                  "poll plus finance B. Races that genuinely have no polling stay at C -- that is "
                  "the honest reading, and the fix is more polls, not a looser scale.",
      "source": "User: more races should reach data grades B and A"},
+    {"id": "D-002", "claim": "Polls feeding the forecast must be independent, adequately "
+                             "sampled and reasonably fresh -- and must attach to the seat "
+                             "actually on the ballot.",
+     "chamber": "both", "metric": "poll quality gate + 2026 seat resolution",
+     "mechanism": "A party-sponsored or year-old poll inflates a race's data grade without "
+                  "adding trustworthy signal; and a poll mapped to the wrong seat_key is lost "
+                  "entirely",
+     "status": "Production",
+     "validation": "SECOND SEAT BUG: Ohio's and Florida's 2026 Senate contests are SPECIAL "
+                   "elections (senate-OH-special), but polls of '2026 Ohio' were mapped to "
+                   "senate-OH -- a race that does not exist -- so 26 real polls were discarded "
+                   "even after D-001. Seat resolution now reads the actual 2026 race universe "
+                   "and skips genuinely ambiguous states (a regular AND a special seat up at "
+                   "once) rather than guessing. QUALITY GATE applied to the 354 congressional "
+                   "polls: 122 partisan/party-sponsored, 14 stale (>365 days) and 8 "
+                   "undersized (<300) are excluded, leaving 210 independent polls. Campaign "
+                   "internals and all-adult samples are excluded on the same basis. Result: 14 "
+                   "Senate seats carry polling, 10 of them at grade A -- including Ohio "
+                   "(10 polls) and Florida (9), which previously had none.",
+     "decision": "votehub gains _quality_reject (internal / partisan / population / sample "
+                 "size / staleness) and _senate_seat_for_state; quality_grade now also receives "
+                 "the REAL age of the most recent poll, so a race polled only long ago is "
+                 "marked down instead of scoring as though the data were current.",
+     "source": "User: include Ohio's polling, get more A/B grades, and only high-quality, "
+               "unbiased, recent polls"},
     {"id": "T-003", "claim": "FIXED INCONSISTENCY: the headline seat count disagreed with the "
                              "race list, and the simulation had drifted away from the published "
                              "per-race probabilities.",
@@ -572,6 +597,19 @@ RESEARCH_CLAIMS = [
                    "race list, where the old bug was most wrong.",
      "decision": "Per-simulation pivotal-seat tally in simulate_control", "source": "User bug report"},
 ]
+
+
+def _poll_age_days(last_poll_date: str | None, as_of: str) -> int | None:
+    """Days between the most recent poll and the forecast date, so the data
+    grade reflects how FRESH the polling is, not merely how much there is."""
+    if not last_poll_date:
+        return None
+    try:
+        latest = date.fromisoformat(str(last_poll_date)[:10])
+        current = date.fromisoformat(str(as_of)[:10])
+    except ValueError:
+        return None
+    return (current - latest).days
 
 
 def build_race_universe() -> list[dict]:
@@ -727,7 +765,8 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
                         redraw_adjust=redraw_adjust)
         feature_rows[race["id"]] = row
         payload = models[race["chamber"]].forecast_payload(
-            row, race["id"], finance_fresh=race["seat_key"] in financed_seats)
+            row, race["id"], finance_fresh=race["seat_key"] in financed_seats,
+            poll_age_days=_poll_age_days(row.last_poll_date, as_of))
         payload.update({"as_of": as_of, "model_version": MODEL_VERSION,
                         "data_version": version})
         snapshots.append(payload)

@@ -303,7 +303,8 @@ class MarginModel:
                           calibration=self.calibration.get(row.chamber))
 
     def forecast_payload(self, row: FeatureRow, race_id: str,
-                         finance_fresh: bool = False) -> dict:
+                         finance_fresh: bool = False,
+                         poll_age_days: int | None = None) -> dict:
         prediction = self.predict(row)
         idx = self._indices()[prediction.model]
         names = [FEATURE_NAMES[i] for i in idx]
@@ -323,7 +324,7 @@ class MarginModel:
             "low95": round(low95, 2), "high95": round(high95, 2),
             "rating": rating(probability),
             "quality": quality_grade(
-                poll_count=row.poll_count, poll_age_days=None,
+                poll_count=row.poll_count, poll_age_days=poll_age_days,
                 candidate_known=True, finance_fresh=finance_fresh,
                 boundary_certain=row.has_prior),
             "components": json.dumps(components),

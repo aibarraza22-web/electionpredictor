@@ -16,6 +16,8 @@ import time
 
 import httpx
 
+from datetime import date
+
 from .. import store
 from .base import STATES, house_seat_key, senate_seat_key, sha256
 
@@ -53,6 +55,60 @@ STATE_NAMES = {
 # A subject like "2026 Texas Democratic" is a PRIMARY poll; only party-less
 # subjects ("2026 Texas") are general-election matchups.
 PRIMARY_SUFFIXES = ("democratic", "republican", "primary")
+
+# Poll-quality gate. The forecast should lean on independent, reasonably fresh
+# polling of likely/registered voters -- a partisan-sponsored or year-old poll
+# inflates a race's data grade without adding trustworthy signal.
+MIN_SAMPLE_SIZE = 300
+MAX_POLL_AGE_DAYS = 365          # a 2026-cycle poll older than this is stale
+ACCEPTED_POPULATIONS = ("lv", "rv")  # likely/registered voters; not "adults"
+
+
+def _quality_reject(poll: dict, poll_date: str) -> str | None:
+    """Reason to exclude this poll, or None to keep it."""
+    if poll.get("internal") is True:
+        return "internal"          # campaign's own poll
+    if poll.get("partisan"):
+        return "partisan"          # party/candidate-sponsored
+    population = str(poll.get("population") or "").lower()
+    if population and population not in ACCEPTED_POPULATIONS:
+        return "population"        # all-adults samples
+    try:
+        if float(poll.get("sample_size") or 0) < MIN_SAMPLE_SIZE:
+            return "sample_size"
+    except (TypeError, ValueError):
+        return "sample_size"
+    try:
+        year, month, day = (int(part) for part in poll_date.split("-"))
+        age_days = (date.today() - date(year, month, day)).days
+    except (ValueError, TypeError):
+        return "bad_date"
+    if age_days > MAX_POLL_AGE_DAYS:
+        return "stale"
+    if age_days < -14:
+        return "future_dated"
+    return None
+
+
+def _senate_seat_for_state(state: str) -> str | None:
+    """The 2026 Senate seat_key actually up in this state.
+
+    Ohio and Florida's 2026 Senate contests are SPECIAL elections
+    (``senate-OH-special``), so polls of "2026 Ohio" must attach to the special
+    seat -- mapping them to ``senate-OH`` silently pointed 26 real polls at a
+    race that does not exist. Ambiguous states (a regular AND a special seat up
+    at once) are skipped rather than guessed.
+    """
+    try:
+        seats = [key for key in store.all_incumbents(CYCLE)
+                 if key.startswith(f"senate-{state}")]
+    except Exception:
+        seats = []
+    if len(seats) == 1:
+        return seats[0]
+    if not seats:
+        return senate_seat_key(state)
+    return None
 
 
 def _norm_name(value: str) -> str:
@@ -185,7 +241,10 @@ def _seat_of(poll: dict, poll_type: str) -> tuple[str, str, str, str | None] | N
             state = next((ab for name, ab in STATE_NAMES.items() if name in subject), "")
         if state not in STATES:
             return None
-        return "senate", senate_seat_key(state), state, None
+        seat_key = _senate_seat_for_state(state)
+        if not seat_key:
+            return None
+        return "senate", seat_key, state, None
     if "representative" in poll_type or "house" in poll_type:
         seat_name = str(poll.get("seat_name") or "").strip().upper()
         match = re.fullmatch(r"([A-Z]{2})-(\d{1,2})", seat_name)
@@ -205,6 +264,8 @@ def _normalize(poll: dict, party_index: dict | None = None) -> dict | None:
     date = str(poll.get("end_date") or poll.get("median_date")
                or poll.get("created_at") or "")[:10]
     if len(date) != 10:
+        return None
+    if _quality_reject(poll, date):
         return None
     # Party-labelled answers (the generic ballot) resolve directly; named
     # candidate fields need the FEC registry to say who is which party.

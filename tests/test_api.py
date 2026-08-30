@@ -69,6 +69,9 @@ def test_race_detail_history_components(client):
     assert client.get("/api/races/2026-house-CA-01/history").json()
     components = client.get("/api/races/2026-house-CA-01/components").json()
     assert "components" in components
+    campaign = client.get("/api/races/2026-house-CA-01/campaign").json()
+    assert campaign["analysis"]["campaign_adjustment"] == 0.0
+    assert "dem_by_at_least_8" in campaign["analysis"]["victory_bands"]
     polls = client.get("/api/races/2026-house-CA-01/polls").json()
     assert polls["polls"] == [] and "fabricated" in polls["note"]
 
@@ -96,6 +99,8 @@ def test_data_health_reports_demo_mode(client):
     # champion snapshots for all 468 races, plus challenger/baseline
     # alternates for the per-race model board
     assert health["counts"]["forecasts"] >= 468
+    assert health["coverage"]["with_candidate_profiles"] == 0
+    assert health["coverage"]["with_campaign_events"] == 0
 
 
 def test_admin_requires_token(client, monkeypatch):

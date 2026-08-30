@@ -13,5 +13,9 @@
 - [ ] 2024 certified results via MEDSL 2024 release or official-results CSVs (until then, 2022 is the latest full-coverage cycle).
 - [ ] Candidate-status source for retirements/open seats and challenger quality.
 - [ ] Live 2026 district/state polling feed (`POLLS_FEED_URL`) once a licensed aggregation is chosen.
-- [ ] Finance and generic-ballot model terms — only after vintage-correct backtests show improvement.
+- [x] Append-only FEC vintages; stage, velocity, cash, burn, and opponent-relative context.
+- [x] Source-backed candidate observation and campaign event ingestion.
+- [x] Structural/poll/campaign decomposition and decisive-win probabilities.
+- [x] Adaptive refresh cadence, input fingerprinting, and source-attempt health.
+- [ ] Promote finance/candidate/event terms only after vintage-correct backtests show improvement.
 - [ ] Ranked-choice transfer simulation for AK/ME and Georgia runoff module.

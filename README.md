@@ -43,11 +43,20 @@ Every raw record carries source, URL, license, `retrieved_at`,
 
 ## Scientific safeguards
 
-* Forecast snapshots are inserted with a unique race/date/model key and never updated.
+* Forecast snapshots are inserted with a unique race/timestamp/model key and never updated.
 * Features are vintage-safe: results enter only for later cycles, polls are cut off at the as-of date, and walk-forward backtests assert both properties at runtime.
 * All published performance numbers come from stored backtest runs (`/api/backtests`); nothing is hand-entered.
 * Missing inputs are flagged and widen uncertainty; they are never imputed with invented values, and coverage is reported by `/api/data-health`.
+* Race pages separate the structural baseline, polling contribution, and a
+  campaign layer. Campaign finance/candidate/event signals are collected with
+  as-of provenance but apply zero production margin points until a challenger
+  improves held-out forecasts.
+* The scheduled workflow wakes hourly and gates itself to daily, 6-hour,
+  3-hour, or 2-hour updates as Election Day approaches. Unchanged inputs do
+  not create duplicate snapshots.
 
 See [METHODOLOGY.md](METHODOLOGY.md), [MODEL_CARD.md](MODEL_CARD.md),
 [DATA_SOURCES.md](DATA_SOURCES.md), [BACKTESTING.md](BACKTESTING.md), and
-[DEPLOYMENT.md](DEPLOYMENT.md).
+[DEPLOYMENT.md](DEPLOYMENT.md). The campaign-layer implementation audit and
+real-history verification are in
+[CAMPAIGN_DYNAMICS_AUDIT.md](CAMPAIGN_DYNAMICS_AUDIT.md).

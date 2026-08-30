@@ -8,6 +8,7 @@ has passed vintage-correct backtesting.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 
@@ -28,6 +29,8 @@ def ingest(cycle: int = 2026, api_key: str | None = None) -> dict:
     if not api_key:
         return {"source": SOURCE, "skipped": "FEC_API_KEY not configured"}
     rows: list[dict] = []
+    snapshots: list[dict] = []
+    retrieved_at = store.now()
     with httpx.Client(timeout=60.0) as client:
         for office in ("H", "S"):
             page = 1
@@ -46,6 +49,13 @@ def ingest(cycle: int = 2026, api_key: str | None = None) -> dict:
                         seat_key = house_seat_key(state, item.get("district") or 1)
                     else:
                         seat_key = senate_seat_key(state)
+                    candidate_id = item.get("candidate_id") or (
+                        f"unresolved:{seat_key}:{item.get('name') or 'unknown'}")
+                    coverage_end = (item.get("coverage_end_date") or retrieved_at)[:10]
+                    committee_id = (item.get("committee_id") or
+                                    item.get("principal_committee_id"))
+                    if committee_id is not None and not isinstance(committee_id, str):
+                        committee_id = json.dumps(committee_id, sort_keys=True, default=str)
                     rows.append({
                         "cycle": cycle, "seat_key": seat_key,
                         "candidate": item.get("name"),
@@ -54,15 +64,42 @@ def ingest(cycle: int = 2026, api_key: str | None = None) -> dict:
                         "receipts": item.get("receipts"),
                         "disbursements": item.get("disbursements"),
                         "cash_on_hand": item.get("cash_on_hand_end_period"),
-                        "as_of": item.get("coverage_end_date"),
+                        "as_of": coverage_end,
+                        "source": SOURCE,
+                    })
+                    snapshots.append({
+                        "cycle": cycle, "seat_key": seat_key,
+                        "candidate_id": candidate_id,
+                        "committee_id": committee_id,
+                        "candidate": item.get("name"),
+                        "party": PARTY.get((item.get("party_full") or "").upper(),
+                                           item.get("party")),
+                        "receipts": item.get("receipts"),
+                        "disbursements": item.get("disbursements"),
+                        "cash_on_hand": item.get("cash_on_hand_end_period"),
+                        "individual_contributions": item.get("individual_contributions"),
+                        "other_committee_contributions": item.get(
+                            "other_political_committee_contributions"),
+                        "candidate_contributions": item.get("candidate_contribution"),
+                        "debts_owed": item.get("debts_owed_by_committee"),
+                        "coverage_start": item.get("coverage_start_date"),
+                        "coverage_end": coverage_end,
+                        "retrieved_at": retrieved_at,
+                        "payload_hash": hashlib.sha256(json.dumps(
+                            item, sort_keys=True, default=str).encode()).hexdigest(),
                         "source": SOURCE,
                     })
                 pages = data.get("pagination", {}).get("pages", 1)
                 if page >= pages:
                     break
                 page += 1
-    inserted = store.insert_rows("finance", rows)
+    # Keep the backwards-compatible latest view current and separately retain
+    # immutable report vintages for timing/velocity research.
+    latest_changed = store.upsert_finance_latest(rows)
+    inserted = store.insert_rows("finance_snapshots", snapshots)
     store.record_source(
         SOURCE, API, LICENSE, available_at=store.now(), sha256=None,
-        record_count=inserted, note=f"cycle {cycle} candidate totals")
-    return {"source": SOURCE, "finance_rows": inserted}
+        record_count=len(snapshots),
+        note=f"cycle {cycle} candidate totals; {inserted} new content vintages")
+    return {"source": SOURCE, "finance_rows": latest_changed,
+            "finance_snapshot_rows": inserted, "records_seen": len(snapshots)}

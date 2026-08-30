@@ -1,6 +1,7 @@
 """Repository functions over the database layer."""
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
@@ -125,6 +126,149 @@ def finance_for_seat(seat_key: str, cycle: int) -> list[dict]:
     with db.get_engine().connect() as c:
         rows = c.execute(select(t).where(t.c.seat_key == seat_key, t.c.cycle == cycle)).fetchall()
     return [dict(r._mapping) for r in rows]
+
+
+def upsert_finance_latest(rows: Sequence[dict]) -> int:
+    """Maintain the legacy one-row-per-candidate finance view.
+
+    Earlier code used INSERT IGNORE, which silently froze a candidate at the
+    first report ever ingested.  Updates are now keyed by cycle/seat/name;
+    immutable reporting vintages live in ``finance_snapshots`` below.
+    """
+    if not rows:
+        return 0
+    t = db.finance
+    changed = 0
+    allowed = {c.name for c in t.columns if c.name != "id"}
+    with db.get_engine().begin() as c:
+        for raw in rows:
+            row = {k: v for k, v in raw.items() if k in allowed}
+            key = (t.c.cycle == row["cycle"], t.c.seat_key == row["seat_key"],
+                   t.c.candidate == row.get("candidate"))
+            existing = c.execute(select(t.c.id).where(*key)).fetchone()
+            if existing:
+                c.execute(update(t).where(t.c.id == existing.id).values(**row))
+            else:
+                c.execute(insert(t).values(**row))
+            changed += 1
+    return changed
+
+
+def finance_history_for_seat(seat_key: str, cycle: int,
+                             as_of: str | None = None) -> list[dict]:
+    t = db.finance_snapshots
+    q = select(t).where(t.c.seat_key == seat_key, t.c.cycle == cycle)
+    if as_of:
+        q = q.where(t.c.coverage_end <= as_of[:10], t.c.retrieved_at <= as_of)
+    q = q.order_by(t.c.coverage_end, t.c.retrieved_at, t.c.id)
+    with db.get_engine().connect() as c:
+        return [dict(r._mapping) for r in c.execute(q)]
+
+
+def all_finance_snapshots(cycle: int, as_of: str | None = None) -> list[dict]:
+    t = db.finance_snapshots
+    q = select(t).where(t.c.cycle == cycle)
+    if as_of:
+        q = q.where(t.c.coverage_end <= as_of[:10], t.c.retrieved_at <= as_of)
+    with db.get_engine().connect() as c:
+        rows = c.execute(q.order_by(t.c.seat_key, t.c.coverage_end,
+                                    t.c.retrieved_at, t.c.id)).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+def profiles_for_seat(seat_key: str, cycle: int,
+                      as_of: str | None = None) -> list[dict]:
+    t = db.candidate_profiles
+    q = select(t).where(t.c.seat_key == seat_key, t.c.cycle == cycle)
+    if as_of:
+        q = q.where(t.c.available_at <= as_of)
+    with db.get_engine().connect() as c:
+        rows = c.execute(q.order_by(t.c.available_at, t.c.id)).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+def all_candidate_profiles(cycle: int, as_of: str | None = None) -> list[dict]:
+    t = db.candidate_profiles
+    q = select(t).where(t.c.cycle == cycle)
+    if as_of:
+        q = q.where(t.c.available_at <= as_of)
+    with db.get_engine().connect() as c:
+        rows = c.execute(q.order_by(t.c.seat_key, t.c.available_at, t.c.id)).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+def events_for_seat(seat_key: str, cycle: int,
+                    as_of: str | None = None) -> list[dict]:
+    t = db.campaign_events
+    q = select(t).where(t.c.seat_key == seat_key, t.c.cycle == cycle)
+    if as_of:
+        q = q.where(t.c.available_at <= as_of)
+    with db.get_engine().connect() as c:
+        rows = c.execute(q.order_by(t.c.available_at, t.c.id)).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+def all_campaign_events(cycle: int, as_of: str | None = None) -> list[dict]:
+    t = db.campaign_events
+    q = select(t).where(t.c.cycle == cycle)
+    if as_of:
+        q = q.where(t.c.available_at <= as_of)
+    with db.get_engine().connect() as c:
+        rows = c.execute(q.order_by(t.c.seat_key, t.c.available_at, t.c.id)).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+def start_ingestion_run(source: str, details: dict | None = None) -> int:
+    with db.get_engine().begin() as c:
+        result = c.execute(insert(db.ingestion_runs).values(
+            source=source, started_at=now(), status="running",
+            details=json.dumps(details or {})))
+        return result.inserted_primary_key[0]
+
+
+def finish_ingestion_run(run_id: int, status: str, records_seen: int = 0,
+                         records_inserted: int = 0, error: str | None = None,
+                         details: dict | None = None) -> None:
+    t = db.ingestion_runs
+    with db.get_engine().begin() as c:
+        c.execute(update(t).where(t.c.id == run_id).values(
+            completed_at=now(), status=status, records_seen=records_seen,
+            records_inserted=records_inserted, error=error,
+            details=json.dumps(details or {})))
+
+
+def ingestion_health() -> list[dict]:
+    """Latest attempted run per source, including failures and skips."""
+    t = db.ingestion_runs
+    with db.get_engine().connect() as c:
+        rows = c.execute(select(t).order_by(t.c.started_at.desc(), t.c.id.desc())).fetchall()
+    latest: dict[str, dict] = {}
+    for row in rows:
+        item = dict(row._mapping)
+        latest.setdefault(item["source"], item)
+    return list(latest.values())
+
+
+def data_fingerprint() -> str:
+    """Stable digest of data contents used to decide whether a run changed."""
+    payload: dict[str, list[dict]] = {}
+    input_tables = (db.election_results, db.polls, db.incumbents,
+                    db.finance_snapshots, db.candidate_profiles, db.campaign_events)
+    with db.get_engine().connect() as c:
+        for table in input_tables:
+            items = []
+            for result in c.execute(select(table)):
+                row = dict(result._mapping)
+                for volatile in ("id", "source_id", "retrieved_at"):
+                    row.pop(volatile, None)
+                items.append(row)
+            payload[table.name] = sorted(items, key=lambda x: json.dumps(
+                x, sort_keys=True, default=str))
+    payload["meta"] = {
+        "senate_dem_seats_not_up": get_meta("senate_dem_seats_not_up"),
+    }
+    raw = json.dumps(payload, sort_keys=True, default=str).encode()
+    return hashlib.sha256(raw).hexdigest()[:16]
 
 
 # --- races ------------------------------------------------------------
@@ -306,9 +450,18 @@ def seed_research_claims(rows: Iterable[dict]) -> None:
     insert_rows("research_claims", list(rows))
 
 
+def seed_research_evidence(rows: Iterable[dict]) -> None:
+    insert_rows("research_evidence", list(rows))
+
+
 def list_research_claims() -> list[dict]:
     with db.get_engine().connect() as c:
         return [dict(r._mapping) for r in c.execute(select(db.research_claims))]
+
+
+def list_research_evidence() -> list[dict]:
+    with db.get_engine().connect() as c:
+        return [dict(r._mapping) for r in c.execute(select(db.research_evidence))]
 
 
 def get_research_claim(claim_id: str) -> dict | None:
@@ -332,6 +485,8 @@ def counts() -> dict[str, int]:
     out = {}
     with db.get_engine().connect() as c:
         for name in ("election_results", "polls", "incumbents", "finance",
-                     "races", "forecasts", "backtest_runs"):
+                     "finance_snapshots", "candidate_profiles", "campaign_events",
+                     "ingestion_runs", "races", "forecasts", "backtest_runs",
+                     "research_evidence"):
             out[name] = c.execute(select(func.count()).select_from(db.metadata.tables[name])).scalar_one()
     return out

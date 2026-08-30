@@ -8,10 +8,12 @@ per-race snapshots, and stores chamber-control simulations.
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from datetime import date
 
 from . import store
 from .backtest import run_backtests
+from .campaign import candidate_context, event_context, finance_context, forecast_analysis
 from .features import PollLookup, ResultLookup, build_row
 from .ingest.base import house_seat_key, senate_seat_key
 from .model import MarginModel
@@ -27,7 +29,8 @@ CYCLE = 2026
 # snapshots are immutable per (race_id, as_of, model_version): a same-day
 # rerun under an unchanged version keeps the day's first frozen numbers, so a
 # real prediction-affecting change must bump the version to surface.
-MODEL_VERSION = "2026.16"
+MODEL_VERSION = "2026.17"
+ELECTION_DATE = "2026-11-03"
 
 # Seats per state, 2020 census apportionment (sums to 435).
 HOUSE_APPORTIONMENT = {
@@ -598,6 +601,91 @@ RESEARCH_CLAIMS = [
      "decision": "Per-simulation pivotal-seat tally in simulate_control", "source": "User bug report"},
 ]
 
+RESEARCH_CLAIMS.extend([
+    {"id": "C-001",
+     "claim": "Campaign execution may explain modest overperformance, while large departures from an even structural baseline require stronger evidence.",
+     "chamber": "both", "metric": "structural baseline versus final margin",
+     "mechanism": "Candidate quality, opponent weakness, money, messaging, and events can move a close race but are endogenous and incompletely observed.",
+     "status": "Measurement layer",
+     "validation": "Per-race structural, polling, and campaign layers are now frozen separately; campaign contribution remains zero until a challenger wins prequential tests.",
+     "decision": "Expose the decomposition and decisive-win bands without hand-entered margin adjustments.",
+     "source": "Campaign Overperformance Analysis; project backtesting discipline"},
+    {"id": "C-002",
+     "claim": "Early money must be measured by campaign stage and relative to both comparable candidates and the actual opponent.",
+     "chamber": "both", "metric": "FEC reporting vintages and opponent-relative finance context",
+     "mechanism": "Early receipts can signal viability, affect candidate exit, and buy capacity, but totals also respond to expected competitiveness.",
+     "status": "Experimental context",
+     "validation": "Append-only FEC vintages now permit future lagged velocity, cash, burn, and stage tests; simple receipt disparity remains rejected under P-005.",
+     "decision": "Collect and display richer finance data; apply zero production points until vintage-safe improvement is demonstrated.",
+     "source": "Campaign Fundraising Impact; FEC OpenFEC; Case and coauthors; Thomsen"},
+    {"id": "C-003",
+     "claim": "Candidate quality and campaign shocks must be source-backed and known as of the forecast timestamp.",
+     "chamber": "both", "metric": "candidate observation and event-ledger coverage",
+     "mechanism": "Withdrawals, replacements, experience, legal events, and institutional support can change a race independently of district fundamentals.",
+     "status": "Data infrastructure",
+     "validation": "CSV adapters require observed_at, available_at, source URL, reliability, and explicit model eligibility.",
+     "decision": "Store auditable observations; prohibit opaque LLM-generated numerical adjustments.",
+     "source": "Campaign Overperformance Analysis; project research mandate"},
+])
+
+RESEARCH_EVIDENCE = [
+    {"id": "E-C002-CASE", "claim_id": "C-002",
+     "citation": "Conceptualizing and Measuring Early Campaign Fundraising in Congressional Elections",
+     "source_url": "https://www.cambridge.org/core/journals/political-science-research-and-methods/article/conceptualizing-and-measuring-early-campaign-fundraising-in-congressional-elections/48B7870A4EC0EC7B3AE060FBC42873C0",
+     "data_period": "U.S. congressional elections; see article",
+     "interpretation": "Predictive measurement roadmap, not a universal causal multiplier.",
+     "expected_mechanism": "Candidate-centered and election-centered early money capture different information.",
+     "proposed_feature": "Stage-normalized receipts and opponent-relative ratios.",
+     "leakage_risk": "Using final-cycle totals in an early forecast.",
+     "validation_test": "As-of FEC-vintage ablation by forecast horizon.",
+     "result": "Data infrastructure implemented; production effect not yet validated.",
+     "decision": "Context only."},
+    {"id": "E-C002-THOMSEN", "claim_id": "C-002",
+     "citation": "Early Money and Strategic Candidate Exit",
+     "source_url": "https://www.cambridge.org/core/journals/british-journal-of-political-science/article/early-money-and-strategic-candidate-exit/3EFFBCA74202AE908F9978B12F630683",
+     "data_period": "U.S. congressional primaries; see article",
+     "interpretation": "Early fundraising is associated with viability and experienced-candidate exit.",
+     "expected_mechanism": "Early money changes campaign trajectories before voters choose.",
+     "proposed_feature": "Early-stage velocity, candidate status, and withdrawal events.",
+     "leakage_risk": "Backfilling withdrawal knowledge before its public timestamp.",
+     "validation_test": "Prequential horizon test with available_at cutoffs.",
+     "result": "Event/vintage storage implemented; effect unvalidated.",
+     "decision": "Context only."},
+    {"id": "E-C001-DYNAMIC", "claim_id": "C-001",
+     "citation": "Electoral Campaigns as Dynamic Contests",
+     "source_url": "https://academic.oup.com/jeea/article/22/6/2782/7595784",
+     "data_period": "Dynamic theoretical and empirical campaign setting; see article",
+     "interpretation": "Campaign resources and popularity evolve through time.",
+     "expected_mechanism": "The timing and relative allocation of resources matter, with diminishing returns.",
+     "proposed_feature": "Forecast-horizon states and finance velocity.",
+     "leakage_risk": "Using later resource allocation at earlier horizons.",
+     "validation_test": "Fixed-population walk-forward horizon comparison.",
+     "result": "Time-indexed storage and adaptive refresh implemented.",
+     "decision": "No production margin coefficient yet."},
+    {"id": "E-C002-FEC", "claim_id": "C-002",
+     "citation": "OpenFEC API and electronic filing documentation",
+     "source_url": "https://api.open.fec.gov/developers/",
+     "data_period": "Current and historical federal filings",
+     "interpretation": "Primary administrative data source.",
+     "expected_mechanism": "Coverage and retrieval timestamps enable vintage-safe finance features.",
+     "proposed_feature": "Immutable content-addressed FEC snapshots.",
+     "leakage_risk": "Treating amended or final totals as known earlier.",
+     "validation_test": "Snapshot cutoff and amendment tests.",
+     "result": "Implemented and tested.",
+     "decision": "Production data infrastructure."},
+    {"id": "E-P005-INTERNAL", "claim_id": "P-005",
+     "citation": "Election Predictor vintage-safe finance ablation",
+     "source_url": "https://github.com/aibarraza22-web/electionpredictor/blob/main/RESEARCH_MANIFEST.md",
+     "data_period": "2012–2024, both chambers",
+     "interpretation": "Predictive test within this project, not a causal estimate.",
+     "expected_mechanism": "Receipts may proxy quality but also react to competitiveness.",
+     "proposed_feature": "Simple receipts disparity.",
+     "leakage_risk": "Final totals and endogenous response to race strength.",
+     "validation_test": "Identical expanding-window blend and feature tests.",
+     "result": "Worsened held-out forecasts in both chambers.",
+     "decision": "Rejected from champion."},
+]
+
 
 def _poll_age_days(last_poll_date: str | None, as_of: str) -> int | None:
     """Days between the most recent poll and the forecast date, so the data
@@ -654,8 +742,8 @@ def build_race_universe() -> list[dict]:
     return rows
 
 
-def data_version(counts: dict, prefix: str = "live") -> str:
-    return f"{prefix}-{date.today().isoformat()}-r{counts['election_results']}-p{counts['polls']}"
+def data_version(fingerprint: str, prefix: str = "live") -> str:
+    return f"{prefix}-{fingerprint}"
 
 
 def _store_alternative_model_snapshots(training, feature_rows, as_of, version):
@@ -720,9 +808,17 @@ def _store_alternative_model_snapshots(training, feature_rows, as_of, version):
 
 
 def build_forecasts(as_of: str | None = None, prefix: str = "live",
-                    with_backtests: bool = True) -> dict:
+                    with_backtests: bool = True, force: bool = False) -> dict:
     """Train on ingested history, freeze snapshots, store control simulations."""
-    as_of = as_of or date.today().isoformat()
+    as_of = as_of or store.now()
+    fingerprint = store.data_fingerprint()
+    if (prefix == "live" and not force
+            and (store.get_meta("last_data_version") or "").startswith("live-")
+            and store.get_meta("last_input_fingerprint") == fingerprint
+            and store.get_meta("last_model_version") == MODEL_VERSION):
+        return {"as_of": store.get_meta("last_forecast_as_of"),
+                "data_version": store.get_meta("last_data_version"),
+                "skipped": "no input or model change"}
     races = build_race_universe()
     results = ResultLookup(store.all_results())
     poll_lookup = PollLookup(store.all_polls())
@@ -753,11 +849,24 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
 
     # Seats with ingested campaign-finance rows for this cycle: a real input to
     # the published data grade instead of a hardcoded False.
-    financed_seats = {row["seat_key"] for row in store.all_finance(CYCLE)}
-    version = data_version(store.counts(), prefix)
+    finance_rows = store.all_finance_snapshots(CYCLE, as_of)
+    profile_rows = store.all_candidate_profiles(CYCLE, as_of)
+    event_rows = store.all_campaign_events(CYCLE, as_of)
+    by_finance, by_profile, by_event = defaultdict(list), defaultdict(list), defaultdict(list)
+    for item in finance_rows:
+        by_finance[item["seat_key"]].append(item)
+    for item in profile_rows:
+        by_profile[item["seat_key"]].append(item)
+    for item in event_rows:
+        by_event[item["seat_key"]].append(item)
+    financed_seats = {row["seat_key"] for row in finance_rows}
+    financed_seats.update(row["seat_key"] for row in store.all_finance(CYCLE))
+    version = data_version(fingerprint, prefix)
     snapshots = []
     feature_meta = {}
     feature_rows = {}
+    previous_by_race = {item["race_id"]: item for item in
+                        store.latest_forecasts(model_version=MODEL_VERSION)}
     for race in races:
         row = build_row(race["seat_key"], CYCLE, race["chamber"], race["state"],
                         race["district"], results, poll_lookup, as_of,
@@ -767,6 +876,16 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
         payload = models[race["chamber"]].forecast_payload(
             row, race["id"], finance_fresh=race["seat_key"] in financed_seats,
             poll_age_days=_poll_age_days(row.last_poll_date, as_of))
+        prediction = models[race["chamber"]].predict(row)
+        components = json.loads(payload["components"])
+        finance = finance_context(by_finance.get(race["seat_key"], []), as_of, ELECTION_DATE)
+        candidates = candidate_context(by_profile.get(race["seat_key"], []))
+        events = event_context(by_event.get(race["seat_key"], []))
+        previous = previous_by_race.get(race["id"])
+        components["_analysis"] = forecast_analysis(
+            prediction.mean, prediction.sigma, prediction.dem_probability,
+            components, finance, candidates, events, previous)
+        payload["components"] = json.dumps(components)
         payload.update({"as_of": as_of, "model_version": MODEL_VERSION,
                         "data_version": version})
         snapshots.append(payload)
@@ -787,6 +906,7 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
                        f"time-decayed polling. Chamber champions -> {champion_desc}",
         "coefficients": json.dumps({ch: json.loads(m.to_json()) for ch, m in models.items()})})
     store.seed_research_claims(RESEARCH_CLAIMS)
+    store.seed_research_evidence(RESEARCH_EVIDENCE)
     # Backtests run before the control simulation: they compute the
     # empirical national-shock size (see backtest.national_error_sigma) that
     # the simulation needs to avoid false aggregate certainty from averaging
@@ -807,10 +927,15 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
 
     store.set_meta("last_forecast_as_of", as_of)
     store.set_meta("last_data_version", version)
+    store.set_meta("last_input_fingerprint", fingerprint)
+    store.set_meta("last_model_version", MODEL_VERSION)
     coverage = {
         "races": len(races),
         "with_prior_result": sum(1 for m in feature_meta.values() if m["has_prior"]),
         "with_polls": sum(1 for m in feature_meta.values() if m["poll_count"] > 0),
+        "with_finance_vintages": len(financed_seats),
+        "with_candidate_profiles": len(by_profile),
+        "with_campaign_events": len(by_event),
     }
     store.set_meta("coverage", json.dumps(coverage))
     return {"as_of": as_of, "data_version": version, "races": len(races),

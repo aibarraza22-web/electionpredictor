@@ -10,6 +10,8 @@ scripts/ingest.py                          app/main.py   FastAPI + dashboard
                    finance
 scripts/forecast.py
   app/features.py  vintage-safe rows   ──►  PostgreSQL (DATEBASE_URL)
+  app/campaign.py  finance vintages,
+                   candidates, events
   app/model.py     ridge fits               SQLite fallback for local dev
   app/backtest.py  walk-forward runs
   app/forecast.py  race universe,
@@ -28,5 +30,8 @@ scripts/forecast.py
   Senate class 2 + ingested specials), immutable snapshots, stored control
   simulations.
 * `app/simulation.py` — seeded correlated margin-space simulation.
+* `app/campaign.py` — stage/opponent-relative finance context, auditable
+  candidate/event context, structural/poll decomposition, and calibrated
+  narrow/4-point/8-point victory bands. It cannot alter the champion margin.
 * The API is typed by FastAPI/OpenAPI; heavy computation happens in the
   pipeline, requests only read (scenarios run a small labelled simulation).

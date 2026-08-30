@@ -31,13 +31,23 @@ environment sign, its midterm interaction, poll average, and poll
 availability. Every feature for cycle *t* uses only information available
 before that election; missing inputs are flagged, never imputed.
 
+**Campaign-development layer (`app/campaign.py`):** every champion snapshot
+also freezes a structural baseline, polling contribution, decisive win-size
+probabilities, stage/opponent-relative FEC context, candidate observations,
+and a source-backed event ledger. The campaign margin contribution is
+currently exactly zero. The project's prequential test of simple receipts
+disparity worsened both chambers, so richer signals must accumulate historical
+vintages and win the same challenger process before affecting production.
+This prevents endogenous fundraising or subjective event judgments from
+becoming hand-tuned points.
+
 **Uncertainty:** each fit's training-residual standard deviation
 (polled/unpolled pools), plus added variance for seats without history.
 Margins map to probabilities with a normal CDF; ratings are labels over
 probabilities, never substitutes for them.
 
 **Control simulation** (`app/simulation.py`): 25,000 seeded draws in margin
-space with a shared 3.5-point national shock plus race-specific noise,
+space with an empirically estimated shared national shock plus race-specific noise,
 preserving correlated errors. Senate control includes the explicit
 tie-break assumption and the count of Democratic-caucus seats not up
 (derived from ingested term data).
@@ -45,3 +55,6 @@ tie-break assumption and the count of Democratic-caucus seats not up
 Ranked-choice (AK/ME) and runoff mechanics are flagged per race and remain
 registered challengers until genuine out-of-sample evidence supports
 promotion.
+
+Snapshots use UTC timestamps rather than one date per day. A content
+fingerprint prevents unchanged inputs from creating duplicate snapshots.

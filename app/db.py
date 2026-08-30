@@ -107,6 +107,87 @@ finance = Table(
     UniqueConstraint("cycle", "seat_key", "candidate", name="uq_finance_candidate"),
 )
 
+# Append-only FEC vintages.  ``finance`` is retained as the compact latest
+# view used by older deployments; it cannot represent amendments or the
+# evolution of a campaign because its uniqueness key contains no reporting
+# date.  This table is the research-safe source for stage/velocity features.
+finance_snapshots = Table(
+    "finance_snapshots", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("cycle", Integer, nullable=False),
+    Column("seat_key", Text, nullable=False),
+    Column("candidate_id", Text, nullable=False),
+    Column("committee_id", Text),
+    Column("candidate", Text),
+    Column("party", Text),
+    Column("receipts", Float),
+    Column("disbursements", Float),
+    Column("cash_on_hand", Float),
+    Column("individual_contributions", Float),
+    Column("other_committee_contributions", Float),
+    Column("candidate_contributions", Float),
+    Column("debts_owed", Float),
+    Column("coverage_start", Text),
+    Column("coverage_end", Text, nullable=False),
+    Column("retrieved_at", Text, nullable=False),
+    Column("payload_hash", Text, nullable=False),
+    Column("source", Text, nullable=False),
+    Column("source_id", Integer),
+    UniqueConstraint("cycle", "candidate_id", "coverage_end", "payload_hash",
+                     name="uq_finance_snapshot_vintage"),
+)
+
+candidate_profiles = Table(
+    "candidate_profiles", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("cycle", Integer, nullable=False),
+    Column("seat_key", Text, nullable=False),
+    Column("candidate_id", Text, nullable=False),
+    Column("candidate", Text),
+    Column("party", Text),
+    Column("profile_type", Text, nullable=False),
+    Column("value", Float),
+    Column("observed_at", Text, nullable=False),
+    Column("available_at", Text, nullable=False),
+    Column("source", Text, nullable=False),
+    Column("source_url", Text),
+    Column("source_id", Integer),
+    UniqueConstraint("cycle", "candidate_id", "profile_type", "available_at", "source",
+                     name="uq_candidate_profile_observation"),
+)
+
+campaign_events = Table(
+    "campaign_events", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("external_id", Text, nullable=False),
+    Column("cycle", Integer, nullable=False),
+    Column("seat_key", Text, nullable=False),
+    Column("candidate_id", Text),
+    Column("event_type", Text, nullable=False),
+    Column("event_date", Text, nullable=False),
+    Column("available_at", Text, nullable=False),
+    Column("reliability", Text, nullable=False),
+    Column("model_eligible", Boolean, default=False),
+    Column("details", Text),
+    Column("source", Text, nullable=False),
+    Column("source_url", Text),
+    Column("source_id", Integer),
+    UniqueConstraint("source", "external_id", name="uq_campaign_event_source"),
+)
+
+ingestion_runs = Table(
+    "ingestion_runs", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("source", Text, nullable=False),
+    Column("started_at", Text, nullable=False),
+    Column("completed_at", Text),
+    Column("status", Text, nullable=False),
+    Column("records_seen", Integer),
+    Column("records_inserted", Integer),
+    Column("error", Text),
+    Column("details", Text),
+)
+
 races = Table(
     "races", metadata,
     Column("id", Text, primary_key=True),
@@ -195,6 +276,22 @@ research_claims = Table(
     Column("validation", Text),
     Column("decision", Text),
     Column("source", Text),
+)
+
+research_evidence = Table(
+    "research_evidence", metadata,
+    Column("id", Text, primary_key=True),
+    Column("claim_id", Text, nullable=False),
+    Column("citation", Text, nullable=False),
+    Column("source_url", Text, nullable=False),
+    Column("data_period", Text),
+    Column("interpretation", Text),
+    Column("expected_mechanism", Text),
+    Column("proposed_feature", Text),
+    Column("leakage_risk", Text),
+    Column("validation_test", Text),
+    Column("result", Text),
+    Column("decision", Text),
 )
 
 audit_logs = Table(

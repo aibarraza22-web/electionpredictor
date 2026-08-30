@@ -7,7 +7,10 @@ assertions verify that no future cycle enters training and no poll after the
 as-of date enters features (`app/backtest.py::walk_forward`).
 
 Reported per run and per cycle: Brier score, log loss, winner accuracy,
-margin MAE/RMSE, 80/95% interval coverage, and 10-bin calibration.
+margin MAE/RMSE, 50/80/95% interval coverage, 10-bin calibration, expected
+calibration error, calibration slope/intercept, and competitive-race margin
+MAE. Extended metrics are stored inside each run's versioned config so the
+existing production schema remains backward compatible.
 
 Every pipeline run also evaluates **baseline models under the identical
 protocol** — prior-result-only, incumbency-only, environment-only, uniform
@@ -19,8 +22,9 @@ tuned away. Each champion run's config also stores **subgroup metrics**
 Dem-held vs Rep-held) and **forecast-horizon metrics** (poll cutoffs 0/30/90
 days before the election).
 
-Run with `python scripts/backtest.py` (also re-run automatically by every
-forecast pipeline execution). Results are persisted to `backtest_runs` and
+Run with `python scripts/backtest.py`. Full validation runs weekly, on manual
+workflow runs, and after methodology changes; frequent data-only refreshes use
+`python scripts/forecast.py --skip-backtests`. Results are persisted to `backtest_runs` and
 served at `/api/backtests` — **the application never reports performance
 numbers that a stored run did not compute**, and this document deliberately
 quotes none: query the API of a deployment for its own validated metrics,

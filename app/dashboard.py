@@ -288,18 +288,19 @@ async function openDetail(id){
 
 function campaignAnalysis(a){
   if(!a||!Object.keys(a).length) return "";
-  const v=a.victory_bands||{}, fin=(a.finance||{}).comparison, ch=a.change_since_previous;
-  const money=fin?`D/R receipts ${fin.dem_to_rep_receipts_ratio??"—"}× · cash ${fin.dem_to_rep_cash_ratio??"—"}× · descriptive signal ${Math.abs(fin.descriptive_campaign_signal||0)<.005?"neutral":(fin.descriptive_campaign_signal>0?"D":"R")+" "+Math.abs(fin.descriptive_campaign_signal).toFixed(2)}`:
+  const v=a.victory_bands||{}, fin=(a.finance||{}).comparison, ch=a.change_since_previous, cad=a.campaign_adjustment_detail||{};
+  const money=fin?`D/R receipts ${fin.dem_to_rep_receipts_ratio??"—"}× · cash ${fin.dem_to_rep_cash_ratio??"—"}× · capacity signal ${Math.abs(fin.descriptive_campaign_signal||0)<.005?"neutral":(fin.descriptive_campaign_signal>0?"D":"R")+" "+Math.abs(fin.descriptive_campaign_signal).toFixed(2)} · credibility ${pct(fin.signal_credibility||0)}`:
     "No comparable Democratic and Republican FEC vintages yet";
-  return `<h2 style="margin-top:.8rem">Race development <small>— campaign data are contextual until they improve held-out forecasts</small></h2>
+  const inputs=(cad.active_inputs||[]).length?(cad.active_inputs||[]).join(", "):"none";
+  return `<h2 style="margin-top:.8rem">Race development <small>— active provisional campaign overlay</small></h2>
     <div class="grid g4">
       <div class="tile"><div class="lbl">Structural baseline</div><div class="big mono" style="font-size:1.15rem">${sgn(a.structural_baseline_margin||0)}</div></div>
       <div class="tile"><div class="lbl">Polling adjustment</div><div class="big mono" style="font-size:1.15rem">${sgn(a.polling_adjustment||0)}</div></div>
-      <div class="tile"><div class="lbl">Campaign adjustment</div><div class="big mono" style="font-size:1.15rem">0.0</div><div class="det">withheld pending validation</div></div>
+      <div class="tile"><div class="lbl">Campaign adjustment</div><div class="big mono" style="font-size:1.15rem">${sgn(a.campaign_adjustment||0)}</div><div class="det">${esc(inputs)} · +${(+cad.added_sigma||0).toFixed(2)} uncertainty</div></div>
       <div class="tile"><div class="lbl">Change from prior snapshot</div><div class="big mono" style="font-size:1.15rem">${ch?sgn(ch.margin_points):"—"}</div><div class="det">${ch?(ch.dem_probability_points>=0?"+":"")+ch.dem_probability_points.toFixed(2)+" probability points":"first snapshot"}</div></div>
     </div>
     <div class="card small" style="margin-top:.55rem"><b>Win-size probabilities:</b> D narrow ${pct(v.dem_narrow_0_to_4||0)} · D by 4+ ${pct(v.dem_by_at_least_4||0)} · D by 8+ ${pct(v.dem_by_at_least_8||0)} · R narrow ${pct(v.rep_narrow_0_to_4||0)} · R by 4+ ${pct(v.rep_by_at_least_4||0)} · R by 8+ ${pct(v.rep_by_at_least_8||0)}</div>
-    <div class="card small" style="margin-top:.45rem"><b>Campaign finance:</b> ${esc(money)}. Stage: ${esc((a.finance||{}).campaign_stage||"unknown")}.</div>`;
+    <div class="card small" style="margin-top:.45rem"><b>Campaign finance:</b> ${esc(money)}. Stage: ${esc((a.finance||{}).campaign_stage||"unknown")}. Poll absorption: ${pct(cad.poll_absorption_multiplier||0)}. Competitive-race multiplier: ${pct(cad.competitive_race_multiplier||0)}.</div>`;
 }
 
 function fmt(x,d=4){return x==null?"—":(+x).toFixed(d);}

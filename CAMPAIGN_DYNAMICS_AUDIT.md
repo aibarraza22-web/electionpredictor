@@ -23,7 +23,7 @@ without evidence would make the forecast less defensible.
 7. The dashboard did not distinguish structural standing, polling movement,
    campaign evidence, or decisive-win probabilities.
 
-## Implemented decisions
+## Implemented decisions in 2026.17
 
 * Preserve the existing champion. The project's 2012–2024 test of simple
   receipts disparity worsened both chambers, so finance still applies zero
@@ -44,7 +44,7 @@ without evidence would make the forecast less defensible.
 
 ## Verification
 
-The complete test suite passes: 48 tests. A fresh synthetic end-to-end run
+The complete test suite passes: 52 tests. A fresh synthetic end-to-end run
 created forecasts for all 468 scheduled House and class-2 Senate races. A
 separate run using the bundled official MEDSL history produced these
 expanding-window diagnostics:
@@ -59,7 +59,7 @@ polls, FEC data, incumbency feed, or candidate/event feed. It verifies the
 pipeline and leakage-safe metrics but is not a claim about the fully
 configured production deployment.
 
-## Features deliberately not promoted
+## Features deliberately not promoted in 2026.17
 
 * Simple receipts disparity: rejected by the existing vintage-safe ablation.
 * Candidate-quality score: not promoted because complete historical as-of
@@ -71,9 +71,40 @@ configured production deployment.
 * Gradient boosting or a Bayesian replacement: not introduced without an
   identical cycle-holdout comparison proving a material gain.
 
-## Next evidence threshold
+## Original next evidence threshold
 
 Accumulate multiple FEC reporting vintages and candidate/event observations,
 then build horizon-specific finance and candidate-quality challengers. Promote
 only if they improve recent-cycle held-out log loss and Brier score without
 degrading calibration, competitive-race error, or stability across cycles.
+
+## Activated production overlay in 2026.18
+
+At the user's direction, the campaign layer now changes the published margin
+and win probability instead of remaining display-only. This is a bounded,
+transparent overlay on the validated structural and polling model, not a
+claim that the previously rejected raw-receipts feature became predictive.
+
+* Finance combines opponent-relative receipts, net cash, fundraising
+  velocity, donor mix, burn rate, reporting depth, and freshness. Its maximum
+  effect declines from 1.75 points early to 0.45 points in the closing stage.
+* Candidate quality uses only timestamped structured observations and requires
+  comparable Democratic and Republican coverage before it changes the margin.
+* Campaign events must be explicitly model-eligible and source-backed. Events
+  after the latest poll are not treated as already absorbed by polling.
+* Four or more recent polls reduce pre-existing campaign signals to 35% of
+  their raw effect, limiting double counting.
+* Ordinary combined campaign effects are capped at three margin points. Only
+  eligible exceptional events such as withdrawal, indictment, major scandal,
+  or ballot-access failure can expand the cap to six points.
+* An independent uncertainty term is added whenever the overlay changes a
+  forecast. Every component, discount, cap, and final adjustment is stored in
+  the race snapshot and displayed in the dashboard.
+
+This overlay is explicitly provisional. The repository's historical test
+still shows that raw receipts disparity worsened forecasts. Complete
+historical as-of vintages for the richer capacity, candidate, and event inputs
+do not yet exist, so 2026.18 must not be described as having proven an
+accuracy improvement. The model will replace these research-informed point
+priors with fitted coefficients when those vintages support a real
+walk-forward comparison.

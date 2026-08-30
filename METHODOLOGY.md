@@ -34,15 +34,18 @@ before that election; missing inputs are flagged, never imputed.
 **Campaign-development layer (`app/campaign.py`):** every champion snapshot
 also freezes a structural baseline, polling contribution, decisive win-size
 probabilities, stage/opponent-relative FEC context, candidate observations,
-and a source-backed event ledger. The campaign margin contribution is
-currently exactly zero. The project's prequential test of simple receipts
-disparity worsened both chambers, so richer signals must accumulate historical
-vintages and win the same challenger process before affecting production.
-This prevents endogenous fundraising or subjective event judgments from
-becoming hand-tuned points.
+and a source-backed event ledger. Model 2026.18 applies a provisional bounded
+overlay using finance capacity, candidate-quality asymmetry, and explicitly
+eligible events. Ordinary effects are capped at three margin points and only
+exceptional events can expand the cap to six. Recent polls absorb most
+pre-existing campaign information, thin or stale inputs are discounted, and
+active adjustments add uncertainty. The project's prequential test still
+rejects raw receipts disparity, so the overlay is reported separately from
+the validated ridge model and is not described as a proven accuracy gain.
 
 **Uncertainty:** each fit's training-residual standard deviation
-(polled/unpolled pools), plus added variance for seats without history.
+(polled/unpolled pools), plus added variance for seats without history and
+for any active provisional campaign overlay.
 Margins map to probabilities with a normal CDF; ratings are labels over
 probabilities, never substitutes for them.
 

@@ -48,9 +48,10 @@ Every raw record carries source, URL, license, `retrieved_at`,
 * All published performance numbers come from stored backtest runs (`/api/backtests`); nothing is hand-entered.
 * Missing inputs are flagged and widen uncertainty; they are never imputed with invented values, and coverage is reported by `/api/data-health`.
 * Race pages separate the structural baseline, polling contribution, and a
-  campaign layer. Campaign finance/candidate/event signals are collected with
-  as-of provenance but apply zero production margin points until a challenger
-  improves held-out forecasts.
+  campaign layer. Model 2026.18 uses a bounded provisional campaign adjustment
+  from as-of finance capacity, comparable candidate-quality observations, and
+  explicitly eligible events. Every component is displayed; recent polls
+  discount already-absorbed information and active adjustments add uncertainty.
 * The scheduled workflow wakes hourly and gates itself to daily, 6-hour,
   3-hour, or 2-hour updates as Election Day approaches. Unchanged inputs do
   not create duplicate snapshots.

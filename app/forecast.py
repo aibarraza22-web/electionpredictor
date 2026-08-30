@@ -10,13 +10,16 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from datetime import date
+from math import sqrt
 
 from . import store
 from .backtest import run_backtests
-from .campaign import candidate_context, event_context, finance_context, forecast_analysis
+from .campaign import (campaign_adjustment, candidate_context, event_context,
+                       finance_context, forecast_analysis)
+from .domain import rating
 from .features import PollLookup, ResultLookup, build_row
 from .ingest.base import house_seat_key, senate_seat_key
-from .model import MarginModel
+from .model import MarginModel, Prediction
 from .simulation import simulate_control
 
 CYCLE = 2026
@@ -29,7 +32,7 @@ CYCLE = 2026
 # snapshots are immutable per (race_id, as_of, model_version): a same-day
 # rerun under an unchanged version keeps the day's first frozen numbers, so a
 # real prediction-affecting change must bump the version to surface.
-MODEL_VERSION = "2026.17"
+MODEL_VERSION = "2026.18"
 ELECTION_DATE = "2026-11-03"
 
 # Seats per state, 2020 census apportionment (sums to 435).
@@ -216,14 +219,36 @@ RESEARCH_CLAIMS = [
                    "with actual outcome at only 0.22 vs polls' 0.76, and is not simply redundant "
                    "with polls (mutual correlation only 0.19) -- an independently WEAK, noisy "
                    "signal in both chambers.",
-     "decision": "Do not add finance as a model input, for either chamber. Directional agreement "
+     "decision": "Do not add raw receipts disparity as a linear model input, for either chamber. Directional agreement "
                  "on hindsight misses is not sufficient evidence, and a positive result in only "
                  "one of two rigorous test methodologies -- especially one traceable to two "
                  "specific cycles out of six -- is not evidence either; tests (2) and one that "
                  "survives a mechanism check are what determine whether a feature earns its "
-                 "place, and finance fails on both counts in both chambers.",
+                 "place, and raw receipts disparity fails on both counts in both chambers. "
+                 "The narrower decision remains in force under the provisional multi-signal "
+                 "overlay in P-006.",
      "source": "User challenge to use 'insane amounts of data' to raise toss-up accuracy; tested "
                "for real once the network policy allowed it, rather than assumed blocked"},
+    {"id": "P-006", "claim": "ACTIVE PROVISIONAL: campaign capacity, candidate-quality "
+                             "asymmetry, and source-backed campaign events directly adjust the "
+                             "published margin, with ordinary effects capped at three points and "
+                             "exceptional events capped at six.",
+     "chamber": "both", "metric": "live margin overlay with explicit per-race attribution",
+     "mechanism": "Early money can build durable capacity, candidate advantages can separate "
+                  "otherwise similar races, and major opponent liabilities can create larger "
+                  "overperformance. Recent polls absorb information already visible to voters.",
+     "status": "Provisional",
+     "validation": "The combined Campaign Fundraising Impact and Campaign Overperformance "
+                   "research bounds ordinary execution effects near 1-3 points and reserves "
+                   "larger movement for exceptional candidate or opponent events. Tests enforce "
+                   "stage weighting, credibility discounts, poll absorption, attribution, caps, "
+                   "and added uncertainty. Complete historical as-of candidate and event vintages "
+                   "are not yet available, so this is not presented as a fitted causal coefficient.",
+     "decision": "Activate the bounded overlay in model 2026.18 at the user's direction. Keep "
+                 "P-005's rejection of raw receipts disparity, publish every component, widen "
+                 "uncertainty when the overlay is active, and replace point priors with fitted "
+                 "coefficients once complete historical vintages permit it.",
+     "source": "Campaign Fundraising Impact + Campaign Overperformance Analysis; explicit user directive"},
     {"id": "N-002", "claim": "FIXED BUG: the control simulation's shared national-shock size "
                              "was a hardcoded constant (3.5pts), understating real cycle-to-"
                              "cycle correlated error and producing false aggregate certainty.",
@@ -606,25 +631,25 @@ RESEARCH_CLAIMS.extend([
      "claim": "Campaign execution may explain modest overperformance, while large departures from an even structural baseline require stronger evidence.",
      "chamber": "both", "metric": "structural baseline versus final margin",
      "mechanism": "Candidate quality, opponent weakness, money, messaging, and events can move a close race but are endogenous and incompletely observed.",
-     "status": "Measurement layer",
-     "validation": "Per-race structural, polling, and campaign layers are now frozen separately; campaign contribution remains zero until a challenger wins prequential tests.",
-     "decision": "Expose the decomposition and decisive-win bands without hand-entered margin adjustments.",
+     "status": "Active provisional overlay",
+     "validation": "Per-race structural, polling, and campaign layers are frozen separately; ordinary campaign effects are bounded at three points and exceptional source-backed events at six.",
+     "decision": "Apply and expose the bounded decomposition, add uncertainty, and publish decisive-win bands.",
      "source": "Campaign Overperformance Analysis; project backtesting discipline"},
     {"id": "C-002",
      "claim": "Early money must be measured by campaign stage and relative to both comparable candidates and the actual opponent.",
      "chamber": "both", "metric": "FEC reporting vintages and opponent-relative finance context",
      "mechanism": "Early receipts can signal viability, affect candidate exit, and buy capacity, but totals also respond to expected competitiveness.",
-     "status": "Experimental context",
+     "status": "Active provisional overlay",
      "validation": "Append-only FEC vintages now permit future lagged velocity, cash, burn, and stage tests; simple receipt disparity remains rejected under P-005.",
-     "decision": "Collect and display richer finance data; apply zero production points until vintage-safe improvement is demonstrated.",
+     "decision": "Use richer finance capacity with stage, credibility, and poll-absorption discounts while retaining P-005's rejection of raw receipts disparity.",
      "source": "Campaign Fundraising Impact; FEC OpenFEC; Case and coauthors; Thomsen"},
     {"id": "C-003",
      "claim": "Candidate quality and campaign shocks must be source-backed and known as of the forecast timestamp.",
      "chamber": "both", "metric": "candidate observation and event-ledger coverage",
      "mechanism": "Withdrawals, replacements, experience, legal events, and institutional support can change a race independently of district fundamentals.",
-     "status": "Data infrastructure",
+     "status": "Active provisional overlay",
      "validation": "CSV adapters require observed_at, available_at, source URL, reliability, and explicit model eligibility.",
-     "decision": "Store auditable observations; prohibit opaque LLM-generated numerical adjustments.",
+     "decision": "Score enumerated observations and explicitly eligible events within hard caps; prohibit opaque LLM-generated adjustments.",
      "source": "Campaign Overperformance Analysis; project research mandate"},
 ])
 
@@ -873,18 +898,51 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
                         holder_party=race["incumbent_party"], state_lean=state_lean,
                         redraw_adjust=redraw_adjust)
         feature_rows[race["id"]] = row
+        poll_age_days = _poll_age_days(row.last_poll_date, as_of)
         payload = models[race["chamber"]].forecast_payload(
             row, race["id"], finance_fresh=race["seat_key"] in financed_seats,
-            poll_age_days=_poll_age_days(row.last_poll_date, as_of))
+            poll_age_days=poll_age_days)
         prediction = models[race["chamber"]].predict(row)
         components = json.loads(payload["components"])
-        finance = finance_context(by_finance.get(race["seat_key"], []), as_of, ELECTION_DATE)
-        candidates = candidate_context(by_profile.get(race["seat_key"], []))
-        events = event_context(by_event.get(race["seat_key"], []))
+        finance = finance_context(by_finance.get(race["seat_key"], []), as_of,
+                                  ELECTION_DATE, chamber=race["chamber"])
+        party_by_candidate = {
+            str(item.get("candidate_id")): str(item.get("party"))
+            for item in finance.get("candidates", []) if item.get("party") in {"D", "R"}
+        }
+        party_by_candidate.update({
+            str(item.get("candidate_id")): str(item.get("party"))
+            for item in by_profile.get(race["seat_key"], [])
+            if item.get("party") in {"D", "R"}
+        })
+        candidates = candidate_context(by_profile.get(race["seat_key"], []),
+                                       party_by_candidate=party_by_candidate)
+        events = event_context(by_event.get(race["seat_key"], []),
+                               party_by_candidate=party_by_candidate, as_of=as_of,
+                               last_poll_date=row.last_poll_date)
+        campaign = campaign_adjustment(
+            prediction.mean, finance, candidates, events,
+            poll_count=row.poll_count, poll_age_days=poll_age_days)
+        final_mean = prediction.mean + campaign["margin_adjustment"]
+        final_sigma = sqrt(prediction.sigma ** 2 + campaign["added_sigma"] ** 2)
+        final_prediction = Prediction(
+            final_mean, final_sigma, prediction.model,
+            calibration=prediction.calibration,
+            calibration_weight=prediction.calibration_weight)
+        low80, high80 = final_prediction.interval(1.282)
+        low95, high95 = final_prediction.interval(1.960)
+        payload.update({
+            "dem_probability": round(final_prediction.dem_probability, 4),
+            "margin": round(final_mean, 2),
+            "low80": round(low80, 2), "high80": round(high80, 2),
+            "low95": round(low95, 2), "high95": round(high95, 2),
+            "rating": rating(final_prediction.dem_probability),
+        })
+        components["campaign_adjustment"] = campaign["margin_adjustment"]
         previous = previous_by_race.get(race["id"])
         components["_analysis"] = forecast_analysis(
-            prediction.mean, prediction.sigma, prediction.dem_probability,
-            components, finance, candidates, events, previous)
+            prediction.mean, final_mean, final_sigma, final_prediction.dem_probability,
+            components, finance, candidates, events, campaign, previous)
         payload["components"] = json.dumps(components)
         payload.update({"as_of": as_of, "model_version": MODEL_VERSION,
                         "data_version": version})
@@ -903,7 +961,8 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
         "created_at": store.now(),
         "description": "Per-chamber ridge regression on vintage-safe "
                        f"fundamentals (state lean, seat history, environment) + "
-                       f"time-decayed polling. Chamber champions -> {champion_desc}",
+                       f"time-decayed polling, plus a bounded stage-aware campaign "
+                       f"capacity/candidate/event overlay. Chamber champions -> {champion_desc}",
         "coefficients": json.dumps({ch: json.loads(m.to_json()) for ch, m in models.items()})})
     store.seed_research_claims(RESEARCH_CLAIMS)
     store.seed_research_evidence(RESEARCH_EVIDENCE)

@@ -76,6 +76,36 @@ def test_race_detail_history_components(client):
     assert polls["polls"] == [] and "fabricated" in polls["note"]
 
 
+def test_finance_overlay_changes_published_margin_and_probability(client):
+    from app import store
+    from app.forecast import build_forecasts
+
+    before = client.get("/api/races/2026-house-CA-01").json()["forecast"]
+    common = {
+        "cycle": 2026, "seat_key": "house-CA-01", "committee_id": None,
+        "individual_contributions": 0, "other_committee_contributions": 0,
+        "candidate_contributions": 0, "debts_owed": 0,
+        "coverage_start": "2025-01-01", "coverage_end": "2026-06-30",
+        "retrieved_at": "2026-07-15T00:00:00+00:00", "source": "test",
+    }
+    store.insert_rows("finance_snapshots", [
+        {**common, "candidate_id": "D1", "candidate": "Dem", "party": "D",
+         "receipts": 1_000_000, "disbursements": 300_000, "cash_on_hand": 700_000,
+         "payload_hash": "D1-strong"},
+        {**common, "candidate_id": "R1", "candidate": "Rep", "party": "R",
+         "receipts": 100_000, "disbursements": 80_000, "cash_on_hand": 20_000,
+         "payload_hash": "R1-weak"},
+    ])
+    build_forecasts(as_of="2026-08-31T00:00:00+00:00", prefix="demo-finance",
+                    with_backtests=False, force=True)
+    after = client.get("/api/races/2026-house-CA-01").json()["forecast"]
+    analysis = client.get("/api/races/2026-house-CA-01/campaign").json()["analysis"]
+    assert analysis["campaign_adjustment"] > 0
+    assert after["margin"] != before["margin"]
+    assert after["dem_probability"] != before["dem_probability"]
+    assert analysis["final_margin"] == after["margin"]
+
+
 def test_backtests_are_real_runs(client):
     payload = client.get("/api/backtests").json()
     assert payload["runs"], "pipeline must persist backtest runs"

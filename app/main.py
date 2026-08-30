@@ -213,7 +213,7 @@ def race_campaign(race_id: str):
     analysis = components.get("_analysis") or {}
     return {"race_id": race_id, "as_of": snapshot["as_of"],
             "analysis": analysis,
-            "note": "Campaign signals are contextual and apply zero production margin points until a vintage-safe challenger wins."}
+            "note": "Model 2026.18 applies a bounded provisional campaign adjustment with explicit attribution and added uncertainty."}
 
 
 @app.get("/api/models")

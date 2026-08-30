@@ -9,7 +9,7 @@ was not produced by one of these runs.
 from __future__ import annotations
 
 import json
-from math import log, sqrt
+from math import exp, log, sqrt
 from statistics import pstdev
 from uuid import uuid4
 
@@ -92,6 +92,8 @@ def metrics(scored: list[dict]) -> dict:
     rmse = sqrt(sum(e * e for e in errors) / n)
     coverage80 = sum(s["low80"] <= s["actual_margin"] <= s["high80"] for s in scored) / n
     coverage95 = sum(s["low95"] <= s["actual_margin"] <= s["high95"] for s in scored) / n
+    coverage50 = sum(s.get("low50", s["low80"]) <= s["actual_margin"]
+                     <= s.get("high50", s["high80"]) for s in scored) / n
     bins = []
     for lower in [i / 10 for i in range(10)]:
         members = [s for s in scored if lower <= s["probability"] < lower + .1]
@@ -100,10 +102,50 @@ def metrics(scored: list[dict]) -> dict:
                 "bin": f"{lower:.1f}-{lower + .1:.1f}", "n": len(members),
                 "forecast": round(sum(m["probability"] for m in members) / len(members), 3),
                 "observed": round(sum(m["dem_won"] for m in members) / len(members), 3)})
+    ece = sum(len([s for s in scored if lower <= s["probability"] < lower + .1])
+              * abs(next((b["forecast"] - b["observed"] for b in bins
+                          if b["bin"] == f"{lower:.1f}-{lower + .1:.1f}"), 0.0))
+              for lower in [i / 10 for i in range(10)]) / n
+    competitive = [s for s in scored if abs(s["actual_margin"]) < 10]
+    competitive_mae = (sum(abs(s["predicted_margin"] - s["actual_margin"])
+                           for s in competitive) / len(competitive)) if competitive else None
+    cal_intercept, cal_slope = _calibration_regression(scored)
     return {"n_races": n, "brier": round(brier, 4), "log_loss": round(log_loss, 4),
             "winner_accuracy": round(accuracy, 4), "margin_mae": round(mae, 2),
             "margin_rmse": round(rmse, 2), "coverage80": round(coverage80, 3),
-            "coverage95": round(coverage95, 3), "calibration": bins}
+            "coverage95": round(coverage95, 3), "coverage50": round(coverage50, 3),
+            "expected_calibration_error": round(ece, 4),
+            "calibration_intercept": round(cal_intercept, 4) if cal_intercept is not None else None,
+            "calibration_slope": round(cal_slope, 4) if cal_slope is not None else None,
+            "competitive_margin_mae": round(competitive_mae, 2) if competitive_mae is not None else None,
+            "calibration": bins}
+
+
+def _calibration_regression(scored: list[dict]) -> tuple[float | None, float | None]:
+    """Logistic calibration intercept/slope on held-out forecast logits."""
+    if len(scored) < 50 or len({s["dem_won"] for s in scored}) < 2:
+        return None, None
+    xs = [log(max(1e-6, min(1 - 1e-6, s["probability"])) /
+              (1 - max(1e-6, min(1 - 1e-6, s["probability"])))) for s in scored]
+    ys = [s["dem_won"] for s in scored]
+    a, b = 0.0, 1.0
+    for _ in range(80):
+        ga = gb = haa = hab = hbb = 0.0
+        for x, y in zip(xs, ys):
+            z = max(-30.0, min(30.0, a + b * x))
+            p = 1.0 / (1.0 + exp(-z))
+            w = p * (1 - p)
+            ga += p - y; gb += (p - y) * x
+            haa += w; hab += w * x; hbb += w * x * x
+        det = haa * hbb - hab * hab
+        if abs(det) < 1e-10:
+            break
+        da = (hbb * ga - hab * gb) / det
+        db = (-hab * ga + haa * gb) / det
+        a -= da; b -= db
+        if abs(da) + abs(db) < 1e-9:
+            break
+    return a, b
 
 
 def national_error_sigma(scored: list[dict], min_cycles: int = 5) -> float | None:
@@ -148,6 +190,7 @@ def walk_forward(rows: list[FeatureRow], chamber: str,
             prediction = model.predict(row)
             low80, high80 = prediction.interval(1.282)
             low95, high95 = prediction.interval(1.960)
+            low50, high50 = prediction.interval(0.674)
             scored.append({
                 "cycle": test_cycle, "seat_key": row.seat_key,
                 "probability": prediction.dem_probability,
@@ -156,6 +199,7 @@ def walk_forward(rows: list[FeatureRow], chamber: str,
                 "dem_won": 1 if row.actual_margin > 0 else 0,
                 "low80": low80, "high80": high80,
                 "low95": low95, "high95": high95,
+                "low50": low50, "high50": high50,
                 "polled": row.poll_count > 0,
                 "training_cycles": sorted(training_cycles),
             })
@@ -191,6 +235,7 @@ def walk_forward_baseline(rows: list[FeatureRow], chamber: str, feature_idx: lis
                 "dem_won": 1 if row.actual_margin > 0 else 0,
                 "low80": mean - 1.282 * sigma, "high80": mean + 1.282 * sigma,
                 "low95": mean - 1.960 * sigma, "high95": mean + 1.960 * sigma,
+                "low50": mean - .674 * sigma, "high50": mean + .674 * sigma,
                 "polled": row.poll_count > 0,
             })
     return scored
@@ -371,6 +416,10 @@ def run_backtests(model_version: str) -> list[dict]:
                 "poll_cutoff": "election day", "min_training_cycles": MIN_TRAINING_CYCLES,
                 "subgroups": subgroup_metrics(scored, rows_by_key),
                 "horizons_days_before_election": horizon_metrics(results, poll_lookup, chamber),
+                "extended_metrics": {k: summary.get(k) for k in (
+                    "coverage50", "expected_calibration_error",
+                    "calibration_intercept", "calibration_slope",
+                    "competitive_margin_mae")},
                 "national_error_sigma_pts": nat_sigma,
                 "note": "coverage reflects ingested sources; polled-race-only cycles "
                         "over-represent competitive districts. national_error_sigma_pts "

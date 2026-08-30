@@ -7,7 +7,10 @@ name: Scheduled forecast pipeline
 # POLLS_FEED_URL repository variable for a live 2026 polling feed
 # (any CSV in the FiveThirtyEight raw-polls schema).
 on:
-  schedule: [{cron: '17 9 * * *'}]
+  # Hourly wake-up; scripts/should_refresh.py gates this to daily / 6h / 3h /
+  # 2h as Election Day approaches. This keeps one auditable workflow while
+  # avoiding needless API calls early in the cycle.
+  schedule: [{cron: '17 * * * *'}]
   workflow_dispatch:
 jobs:
   refresh:
@@ -19,20 +22,31 @@ jobs:
       FEC_API_KEY: ${{ secrets.FEC_API_KEY }}
       DATAVERSE_API_KEY: ${{ secrets.DATAVERSE_API_KEY }}
       POLLS_FEED_URL: ${{ vars.POLLS_FEED_URL }}
+      CANDIDATE_PROFILES_URL: ${{ vars.CANDIDATE_PROFILES_URL }}
+      CAMPAIGN_EVENTS_URL: ${{ vars.CAMPAIGN_EVENTS_URL }}
     steps:
       - uses: actions/checkout@v4
+      - name: Determine adaptive refresh cadence
+        id: cadence
+        run: python scripts/should_refresh.py
       - uses: actions/setup-python@v5
+        if: steps.cadence.outputs.run == 'true'
         with: {python-version: '3.12'}
-      - run: pip install -r requirements.txt
+      - if: steps.cadence.outputs.run == 'true'
+        run: pip install -r requirements.txt
       - name: Require production database
+        if: steps.cadence.outputs.run == 'true'
         run: |
           if [ -z "$DATEBASE_URL" ]; then
             echo "::warning::DATABASE_URL secret not configured; skipping live refresh."
             echo "SKIP=1" >> "$GITHUB_ENV"
           fi
       - name: Ingest primary sources
-        if: env.SKIP != '1'
-        run: python scripts/ingest.py --sources fte_polls,legislators,medsl,fec,votehub,polls_feed
-      - name: Build forecast, control simulation, and validation backtests
-        if: env.SKIP != '1'
+        if: steps.cadence.outputs.run == 'true' && env.SKIP != '1'
+        run: python scripts/ingest.py --sources fte_polls,legislators,medsl,fec,votehub,polls_feed,candidate_profiles,campaign_events
+      - name: Build frequent forecast and control simulation
+        if: steps.cadence.outputs.run == 'true' && steps.cadence.outputs.full_backtest != 'true' && env.SKIP != '1'
+        run: python scripts/forecast.py --skip-backtests
+      - name: Build forecast with full validation backtests
+        if: steps.cadence.outputs.run == 'true' && steps.cadence.outputs.full_backtest == 'true' && env.SKIP != '1'
         run: python scripts/forecast.py

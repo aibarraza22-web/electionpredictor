@@ -157,7 +157,7 @@ footer{margin-top:2.2rem;color:var(--ink3);font-size:.78rem}
 <script>
 "use strict";
 const $=s=>document.querySelector(s), esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const pct=x=>(x*100).toFixed(1)+"%", sgn=x=>(x>0?"D+":"R+")+Math.abs(x).toFixed(1);
+const pct=x=>(x*100).toFixed(1)+"%", sgn=x=>Math.abs(x)<.005?"Even":(x>0?"D+":"R+")+Math.abs(x).toFixed(1);
 const RT={"Safe Democratic":"SD","Likely Democratic":"LD","Lean Democratic":"ND","Toss-up":"TU","Lean Republican":"NR","Likely Republican":"LR","Safe Republican":"SR"};
 let RACES=[], FC={}, sortK="dem_probability", sortAsc=true;
 const j=async u=>{const r=await fetch(u); if(!r.ok) throw new Error(u+" -> "+r.status); return r.json();};
@@ -256,14 +256,15 @@ async function openDetail(id){
     </div>
     <div id="dComp"></div><div id="dModels" style="margin-top:.8rem"></div>
     <div id="dPolls" class="small" style="margin-top:.7rem">Loading polls…</div><div id="dHist" class="small muted" style="margin-top:.5rem"></div>`;
-  const comp=JSON.parse(f.components||"{}"), tier=comp._model; delete comp._model;
-  const entries=Object.entries(comp); const mx=Math.max(...entries.map(([,v])=>Math.abs(v)),1);
+  const comp=JSON.parse(f.components||"{}"), tier=comp._model, analysis=comp._analysis||{};
+  delete comp._model; delete comp._analysis;
+  const entries=Object.entries(comp).filter(([,v])=>typeof v==="number"); const mx=Math.max(...entries.map(([,v])=>Math.abs(v)),1);
   $("#dComp").innerHTML=`<h2 style="margin-top:.4rem">Why this forecast <small>— additive margin components (points), ${tier==="full"?"polls + fundamentals tier":"fundamentals tier (no polls yet for this race)"}</small></h2>`+
     entries.map(([k,v])=>{
       const w=Math.abs(v)/mx*50;
       const left=v<0? (50-w):50;
       return `<div class="comp"><span>${esc(k)}</span><span class="bar"><i style="left:${left}%;width:${w}%;background:${v>=0?"var(--dem)":"var(--rep)"}"></i><b style="position:absolute;left:50%;top:0;bottom:0;width:1.5px;background:var(--ink3)"></b></span><span class="mono" style="text-align:right">${v>=0?"D+":"R+"}${Math.abs(v).toFixed(2)}</span></div>`;
-    }).join("");
+    }).join("")+campaignAnalysis(analysis);
   d.scrollIntoView({behavior:"smooth",block:"end"});
   try{
     const mm=await j(`/api/races/${id}/models`);
@@ -283,6 +284,22 @@ async function openDetail(id){
       : `<span class="muted">${esc(polls.note||"No polls ingested for this race — the model widens uncertainty instead of assuming a tie.")}</span>`;
     $("#dHist").textContent="Frozen snapshots: "+hist.map(h=>`${h.as_of} (${(h.dem_probability*100).toFixed(1)}%)`).join(" → ");
   }catch(e){ $("#dPolls").textContent=""; }
+}
+
+function campaignAnalysis(a){
+  if(!a||!Object.keys(a).length) return "";
+  const v=a.victory_bands||{}, fin=(a.finance||{}).comparison, ch=a.change_since_previous;
+  const money=fin?`D/R receipts ${fin.dem_to_rep_receipts_ratio??"—"}× · cash ${fin.dem_to_rep_cash_ratio??"—"}× · descriptive signal ${Math.abs(fin.descriptive_campaign_signal||0)<.005?"neutral":(fin.descriptive_campaign_signal>0?"D":"R")+" "+Math.abs(fin.descriptive_campaign_signal).toFixed(2)}`:
+    "No comparable Democratic and Republican FEC vintages yet";
+  return `<h2 style="margin-top:.8rem">Race development <small>— campaign data are contextual until they improve held-out forecasts</small></h2>
+    <div class="grid g4">
+      <div class="tile"><div class="lbl">Structural baseline</div><div class="big mono" style="font-size:1.15rem">${sgn(a.structural_baseline_margin||0)}</div></div>
+      <div class="tile"><div class="lbl">Polling adjustment</div><div class="big mono" style="font-size:1.15rem">${sgn(a.polling_adjustment||0)}</div></div>
+      <div class="tile"><div class="lbl">Campaign adjustment</div><div class="big mono" style="font-size:1.15rem">0.0</div><div class="det">withheld pending validation</div></div>
+      <div class="tile"><div class="lbl">Change from prior snapshot</div><div class="big mono" style="font-size:1.15rem">${ch?sgn(ch.margin_points):"—"}</div><div class="det">${ch?(ch.dem_probability_points>=0?"+":"")+ch.dem_probability_points.toFixed(2)+" probability points":"first snapshot"}</div></div>
+    </div>
+    <div class="card small" style="margin-top:.55rem"><b>Win-size probabilities:</b> D narrow ${pct(v.dem_narrow_0_to_4||0)} · D by 4+ ${pct(v.dem_by_at_least_4||0)} · D by 8+ ${pct(v.dem_by_at_least_8||0)} · R narrow ${pct(v.rep_narrow_0_to_4||0)} · R by 4+ ${pct(v.rep_by_at_least_4||0)} · R by 8+ ${pct(v.rep_by_at_least_8||0)}</div>
+    <div class="card small" style="margin-top:.45rem"><b>Campaign finance:</b> ${esc(money)}. Stage: ${esc((a.finance||{}).campaign_stage||"unknown")}.</div>`;
 }
 
 function fmt(x,d=4){return x==null?"—":(+x).toFixed(d);}

@@ -8,8 +8,11 @@
   Postgres, RDS...). `postgres://` shorthand is accepted. Without it the app
   falls back to local SQLite — on Vercel that filesystem is ephemeral and
   `/api/data-health` flags it as non-durable.
-* **Pipeline:** `.github/workflows/forecast.yml` runs daily: ingest all
-  adapters → train → backtest → freeze snapshots → store control simulations.
+* **Pipeline:** `.github/workflows/forecast.yml` wakes hourly, then gates to
+  daily when more than 180 days out, every six hours at 61–180 days, every
+  three hours at 15–60 days, and every two hours during the final 14 days.
+  It ingests, fingerprints inputs, and freezes a new snapshot only when data
+  or the model changed. Full backtests run weekly and on manual runs.
   The serving layer only reads; heavy work never happens in a request.
 
 ## Vercel setup
@@ -31,7 +34,8 @@
 3. In GitHub, add repository secret `DATABASE_URL` (correctly spelled —
    the workflow remaps it to `DATEBASE_URL` for the app; same value as
    above) plus
-   optionally `FEC_API_KEY`, and repository variable `POLLS_FEED_URL`; then
+   optionally `FEC_API_KEY`, and repository variables `POLLS_FEED_URL`,
+   `CANDIDATE_PROFILES_URL`, and `CAMPAIGN_EVENTS_URL`; then
    run the "Scheduled forecast pipeline" workflow once manually.
 4. Visit `/api/data-health` — it must report `mode: live`,
    `durable_storage: true`, and list the ingested sources.
@@ -39,9 +43,11 @@
 ## Operational rules
 
 * `/api/data-health` is the health endpoint; alert on `mode` != live, stale
-  `last_forecast_as_of`, or empty `backtest_runs`.
+  sources, failed latest ingestion attempts, stale `last_forecast_as_of`, or
+  empty `backtest_runs`.
 * Source credentials live only in a secret manager (GitHub secrets / Vercel
   env), never in the repo.
 * Ingestion validates availability timestamps and preserves raw payload
-  hashes; forecasts write a data version; retraining happens only through the
-  pipeline (which re-runs validation backtests every time).
+  hashes; forecasts write a content fingerprint. Frequent retraining happens
+  through the pipeline, while full historical validation runs separately to
+  control cost.

@@ -50,10 +50,24 @@ missing values — absent inputs are flagged and widen uncertainty instead.
     https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/IG0UN2
     and replace `data/vintage/medsl_us_house_1976_2024.tab`.
 * **`fec`** — official FEC API candidate totals for 2026 (public domain;
-  requires `FEC_API_KEY`). Displayed per race; **not** a model input until a
-  finance term passes vintage-correct backtesting.
+  requires `FEC_API_KEY`). The compact `finance` table is updated on every
+  run, while `finance_snapshots` keeps content-addressed reporting vintages,
+  including receipts, spending, cash, debt, individual receipts, coverage
+  dates, and retrieval time. Amendments are retained as new content vintages.
+  Finance remains outside the champion until a stage-aware challenger passes
+  vintage-correct backtesting.
 * **`polls_feed`** — live 2026 polling: any CSV in the 538 raw-polls schema,
   configured with `POLLS_FEED_URL`.
+* **`candidate_profiles`** — optional structured CSV configured with
+  `CANDIDATE_PROFILES_URL`. Required columns: `seat_key,candidate_id,
+  profile_type,observed_at,available_at,source_url`; optional columns include
+  `cycle,candidate,party,value`. Allowed profile types are enumerated in
+  `app/ingest/campaign.py`. Protected traits are prohibited.
+* **`campaign_events`** — optional structured CSV configured with
+  `CAMPAIGN_EVENTS_URL`. Required columns: `external_id,seat_key,event_type,
+  event_date,available_at,reliability,source_url`; optional columns include
+  `cycle,candidate_id,model_eligible,details`. `details` must be JSON. Model
+  eligibility is explicit and does not itself create a numerical adjustment.
 * **`scripts/import_csv.py`** — certified results from state election
   authorities (`cycle,chamber,state,district,dem_votes,rep_votes[,special]`),
   e.g. to load 2024 results before an aggregate release covers them.
@@ -71,3 +85,6 @@ prefers `official-results-csv` > `medsl-constituency-returns` >
   intervals and lower quality grades.
 * Incumbency reflects the current seat holder; announced retirements need a
   candidate-status source and are otherwise not marked as open seats.
+* Candidate and event feeds are optional and have no complete federal source.
+  Missing observations are reported as missing, never interpreted as evidence
+  that a candidate is weak or that no event occurred.

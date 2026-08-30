@@ -31,13 +31,23 @@ def main() -> int:
         if name not in ADAPTERS:
             print(f"[skip] unknown source {name!r}; known: {sorted(ADAPTERS)}")
             continue
+        run_id = store.start_ingestion_run(name)
         try:
             summary = ADAPTERS[name]()
             print(f"[ok] {name}: {json.dumps(summary, default=str)}")
+            inserted = sum(int(v) for k, v in summary.items()
+                           if k.endswith(("_rows", "_inserted")) and isinstance(v, int))
             if "skipped" not in summary:
                 succeeded += 1
+                store.finish_ingestion_run(run_id, "success",
+                                           records_seen=int(summary.get("records_seen") or 0),
+                                           records_inserted=inserted,
+                                           details=summary)
+            else:
+                store.finish_ingestion_run(run_id, "skipped", details=summary)
         except Exception as exc:
             print(f"[fail] {name}: {exc}")
+            store.finish_ingestion_run(run_id, "failed", error=str(exc))
     print(f"table counts: {store.counts()}")
     return 0 if succeeded else 1
 

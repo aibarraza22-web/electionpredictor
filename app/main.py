@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
@@ -64,13 +65,37 @@ def health_payload() -> dict:
                         "DATEBASE_URL to a managed PostgreSQL instance.")
     if mode == "live" and not counts["backtest_runs"]:
         warnings.append("No validated backtest run stored; treat forecasts as unvalidated.")
+    ingestion = store.ingestion_health()
+    for run in ingestion:
+        if run["status"] == "failed":
+            warnings.append(f"Latest {run['source']} ingestion failed: {run.get('error') or 'unknown error'}")
+    sources = store.sources_summary()
+    freshness_hours = {
+        "polls-feed": 8, "votehub-polls": 8, "fec-candidate-totals": 24,
+        "unitedstates-congress-legislators": 168, "medsl-constituency-returns": 8760,
+    }
+    now = datetime.now(timezone.utc)
+    for source in sources:
+        stamp = source.get("last_retrieved_at")
+        try:
+            age = (now - datetime.fromisoformat(stamp)).total_seconds() / 3600
+        except (TypeError, ValueError):
+            age = None
+        maximum = freshness_hours.get(source["source"])
+        source["age_hours"] = round(age, 1) if age is not None else None
+        source["expected_max_age_hours"] = maximum
+        source["freshness"] = ("unknown" if age is None or maximum is None else
+                               "fresh" if age <= maximum else "stale")
+        if mode == "live" and source["freshness"] == "stale":
+            warnings.append(f"Source {source['source']} is stale ({source['age_hours']} hours old).")
     coverage = store.get_meta("coverage")
     return {
         "mode": mode,
         "database_backend": db.backend(),
         "durable_storage": db.is_durable(),
         "counts": counts,
-        "sources": store.sources_summary(),
+        "sources": sources,
+        "ingestion_runs": ingestion,
         "coverage": json.loads(coverage) if coverage else None,
         "last_forecast_as_of": store.get_meta("last_forecast_as_of"),
         "data_version": store.get_meta("last_data_version"),
@@ -172,9 +197,23 @@ def race_finance(race_id: str):
     if not race:
         raise HTTPException(404)
     rows = store.finance_for_seat(race["seat_key"], race["cycle"])
-    return {"race_id": race_id, "finance": rows,
-            "note": None if rows else "No FEC filings ingested for this race yet "
+    history = store.finance_history_for_seat(race["seat_key"], race["cycle"])
+    return {"race_id": race_id, "finance": rows, "history": history,
+            "note": None if rows or history else "No FEC filings ingested for this race yet "
                                       "(configure FEC_API_KEY and run ingestion)."}
+
+
+@app.get("/api/races/{race_id}/campaign")
+def race_campaign(race_id: str):
+    race = store.get_race(race_id)
+    snapshot = store.latest_forecast(race_id, _champion_version())
+    if not race or not snapshot:
+        raise HTTPException(404)
+    components = json.loads(snapshot.get("components") or "{}")
+    analysis = components.get("_analysis") or {}
+    return {"race_id": race_id, "as_of": snapshot["as_of"],
+            "analysis": analysis,
+            "note": "Campaign signals are contextual and apply zero production margin points until a vintage-safe challenger wins."}
 
 
 @app.get("/api/models")
@@ -216,6 +255,11 @@ def research():
     return store.list_research_claims()
 
 
+@app.get("/api/research-evidence")
+def research_evidence():
+    return store.list_research_evidence()
+
+
 @app.get("/api/research/{claim_id}")
 def research_claim(claim_id: str):
     claim = store.get_research_claim(claim_id)
@@ -227,7 +271,9 @@ def research_claim(claim_id: str):
 @app.get("/api/metrics")
 def metrics_catalog():
     return {"metrics": ["Brier score", "log loss", "winner accuracy", "margin MAE",
-                        "margin RMSE", "calibration", "80/95 interval coverage"],
+                        "margin RMSE", "calibration", "50/80/95 interval coverage",
+                        "narrow/4-point/8-point victory probabilities",
+                        "competitive-race error", "seat-count MAE"],
             "computed_by": "expanding-window backtest runs; see /api/backtests"}
 
 

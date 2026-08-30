@@ -30,7 +30,9 @@ def refresh_decision(now: datetime, manual: bool = False) -> dict:
 def main() -> int:
     decision = refresh_decision(
         datetime.now(timezone.utc),
-        manual=os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch")
+        # A prediction-code merge must rebuild production immediately. Vercel
+        # deploys the API but does not write a new database snapshot.
+        manual=os.getenv("GITHUB_EVENT_NAME") in {"workflow_dispatch", "push"})
     print(json.dumps(decision))
     output = os.getenv("GITHUB_OUTPUT")
     if output:

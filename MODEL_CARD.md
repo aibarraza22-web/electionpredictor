@@ -24,10 +24,13 @@ the last validated model. Metrics live in `/api/backtests`, never in prose.
 * FEC totals now retain immutable reporting vintages and expose stage,
   velocity, cash, burn, and opponent-relative context. A prior vintage-safe
   test found that simple receipts disparity worsened both chambers, so the
-  production campaign adjustment remains exactly zero until a richer
-  challenger wins held-out validation.
+  model does not use raw receipts as a linear feature. Model 2026.18 instead
+  uses a bounded, stage-aware capacity overlay with explicit credibility and
+  poll-absorption discounts. It is provisional, fully attributed, and widens
+  uncertainty when active.
 * Candidate-quality observations and campaign events require a timestamp and
-  source URL. They are auditable context, not subjective scores.
+  source URL. Comparable candidate observations and explicitly model-eligible
+  events can affect the provisional overlay within hard caps.
 * Redistricting breaks seat-history comparability (lookback is restricted to
   post-redistricting cycles for the House).
 

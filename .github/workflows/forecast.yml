@@ -7,6 +7,15 @@ name: Scheduled forecast pipeline
 # POLLS_FEED_URL repository variable for a live 2026 polling feed
 # (any CSV in the FiveThirtyEight raw-polls schema).
 on:
+  # Prediction-code merges must rebuild the production database immediately;
+  # a Vercel redeploy alone only updates the serving layer.
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'scripts/**'
+      - 'requirements.txt'
+      - '.github/workflows/forecast.yml'
   # Hourly wake-up; scripts/should_refresh.py gates this to daily / 6h / 3h /
   # 2h as Election Day approaches. This keeps one auditable workflow while
   # avoiding needless API calls early in the cycle.

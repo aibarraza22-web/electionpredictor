@@ -82,6 +82,56 @@ def test_legislators_parse_builds_2026_universe():
     assert dem_not_up == 1  # the Independent counts toward the Democratic caucus
 
 
+def test_fec_ingest_creates_candidate_status_profiles(temp_db, monkeypatch):
+    from app import store
+    from app.ingest import fec
+
+    item = {
+        "candidate_id": "H6AZ01234", "name": "TEST, CANDIDATE",
+        "state": "AZ", "district": "01", "party": "DEM",
+        "party_full": "DEMOCRATIC PARTY", "incumbent_challenge": "I",
+        "receipts": 100_000, "disbursements": 20_000,
+        "cash_on_hand_end_period": 80_000, "debts_owed_by_committee": 0,
+        "individual_itemized_contributions": 60_000,
+        "individual_unitemized_contributions": 10_000,
+        "coverage_start_date": "2025-01-01", "coverage_end_date": "2026-06-30",
+        "load_date": "2026-07-15T12:00:00+00:00",
+    }
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, _url, params):
+            results = [item] if params["office"] == "H" else []
+            return Response({"results": results, "pagination": {"pages": 1}})
+
+    monkeypatch.setattr(fec.httpx, "Client", Client)
+    summary = fec.ingest(api_key="test")
+    assert summary["candidate_status_profile_rows"] == 1
+    profile = store.all_candidate_profiles(2026)[0]
+    assert profile["profile_type"] == "incumbent"
+    assert profile["party"] == "D"
+    snapshot = store.all_finance_snapshots(2026)[0]
+    assert snapshot["individual_contributions"] == 70_000
+
+
 def test_bundled_senate_file_is_real_and_parses():
     # Guards the root-cause Senate fix: the bundled Senate returns must exist,
     # parse, and match known certified margins (so the model never silently

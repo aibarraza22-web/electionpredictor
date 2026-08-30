@@ -54,8 +54,10 @@ missing values — absent inputs are flagged and widen uncertainty instead.
   run, while `finance_snapshots` keeps content-addressed reporting vintages,
   including receipts, spending, cash, debt, individual receipts, coverage
   dates, and retrieval time. Amendments are retained as new content vintages.
-  Finance remains outside the champion until a stage-aware challenger passes
-  vintage-correct backtesting.
+  Model 2026.18 uses these fields in a bounded provisional capacity overlay;
+  raw receipts disparity remains excluded from the fitted ridge model. The
+  same response automatically records FEC incumbent/challenger/open-seat
+  status as timestamped candidate-profile observations.
 * **`polls_feed`** — live 2026 polling: any CSV in the 538 raw-polls schema,
   configured with `POLLS_FEED_URL`.
 * **`candidate_profiles`** — optional structured CSV configured with
@@ -67,7 +69,8 @@ missing values — absent inputs are flagged and widen uncertainty instead.
   `CAMPAIGN_EVENTS_URL`. Required columns: `external_id,seat_key,event_type,
   event_date,available_at,reliability,source_url`; optional columns include
   `cycle,candidate_id,model_eligible,details`. `details` must be JSON. Model
-  eligibility is explicit and does not itself create a numerical adjustment.
+  eligibility is explicit. Only eligible, source-backed events can affect the
+  provisional campaign adjustment.
 * **`scripts/import_csv.py`** — certified results from state election
   authorities (`cycle,chamber,state,district,dem_votes,rep_votes[,special]`),
   e.g. to load 2024 results before an aggregate release covers them.

@@ -24,7 +24,8 @@ PROFILE_SOURCE = "candidate-profile-feed"
 EVENT_SOURCE = "campaign-event-feed"
 
 PROFILE_TYPES = {
-    "incumbent", "former_officeholder", "elected_official", "veteran",
+    "incumbent", "challenger", "open_seat_candidate", "former_officeholder",
+    "elected_official", "veteran",
     "business_executive", "first_time_candidate", "previous_overperformance",
     "major_party_support", "competitive_primary", "uncontested_primary",
 }

@@ -586,8 +586,13 @@ async function main(){
     const f=[...$("#detail").querySelectorAll('a[href],button,select,input,[tabindex]:not([tabindex="-1"])')]
       .filter(el=>el.offsetParent!==null);
     if(!f.length) return;
-    const first=f[0], last=f[f.length-1];
-    if(e.shiftKey&&document.activeElement===first){ e.preventDefault(); last.focus(); }
+    const first=f[0], last=f[f.length-1], panel=$("#detail");
+    // The panel itself takes focus on open (so a screen reader announces the
+    // dialog and its title). It is tabindex="-1", so it is not in `f` — and
+    // without treating it as the reverse boundary, one Shift+Tab straight
+    // after opening escapes the modal onto the page behind the backdrop.
+    const atStart=document.activeElement===first||document.activeElement===panel;
+    if(e.shiftKey&&atStart){ e.preventDefault(); last.focus(); }
     else if(!e.shiftKey&&document.activeElement===last){ e.preventDefault(); first.focus(); }
   });
 

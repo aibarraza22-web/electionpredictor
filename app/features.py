@@ -46,6 +46,33 @@ SOURCE_PRIORITY = ["official-results-csv", "medsl-constituency-returns",
 POLL_HALF_LIFE_DAYS = 21.0
 PRIOR_CLIP = 50.0
 
+# A seat's polling counts only while it is still evidence. Each poll's
+# contribution decays with the same 21-day half-life used for the average, so
+# the total decay weight answers "how many fresh polls back this number?"; below
+# MIN_POLL_WEIGHT the seat is treated as unpolled.
+#
+# 0.05 is one lone poll at about 91 days old (0.5 ** (91/21)). It is set where
+# it is because of what the live board looks like versus what history looks
+# like. Historically, a polled seat is a well-polled seat: at election eve the
+# median House seat carries weight 0.72 and only 5% of seats fall below 0.10;
+# the Senate median is 3.57 and 0.3% fall below 0.10. In the 2026 cycle three
+# of the five polled seats sit at weight 0.003 or less -- senate-NC's only poll
+# is from November 2025, weight 0.00006, and it was reading D+10 in North
+# Carolina, driving the forecast exactly as hard as Montana's ten polls from
+# the last three weeks and routing the seat to the polls-only model tier on top
+# of that.
+#
+# Measured, not assumed: scaling the poll average by a continuous
+# weight/(weight+k) trust factor was tested walk-forward at k = 0.5, 1, 2 and 4
+# and made every metric worse in both chambers at both the election-eve and
+# 30-days-out cutoffs (House Brier 0.1211 -> 0.1240 -> 0.1284 -> 0.1341 ->
+# 0.1412), because on the historical population it discounts polls that
+# deserved full weight. The floor alone is a wash there (House Brier
+# 0.1211 -> 0.1209, Senate 0.0471 -> 0.0474 over ~50 affected rows) precisely
+# because history contains almost none of the thin-evidence case: it is the
+# live board, not the backtest population, that this guards.
+MIN_POLL_WEIGHT = 0.05
+
 
 @dataclass
 class FeatureRow:
@@ -240,13 +267,26 @@ class PollLookup:
         for p in polls:
             self._by_seat.setdefault((p["cycle"], p["seat_key"]), []).append(p)
 
-    def average(self, cycle: int, seat_key: str, as_of: str) -> tuple[float | None, int, str | None]:
+    def average(self, cycle: int, seat_key: str,
+                as_of: str) -> tuple[float | None, int, str | None]:
         """(weighted margin, poll count, last field date), polls after as_of excluded."""
+        margin, count, last, _weight = self.summary(cycle, seat_key, as_of)
+        return margin, count, last
+
+    def summary(self, cycle: int, seat_key: str,
+                as_of: str) -> tuple[float | None, int, str | None, float]:
+        """As ``average``, plus the total decay weight behind the average.
+
+        The weight is what ``poll_trust`` turns into the 0-1 discount applied
+        to the poll features: it is the count of polls expressed in
+        fresh-poll equivalents, so ten polls from the last three weeks and one
+        poll from nine months ago are no longer the same input.
+        """
         cutoff = _to_date(as_of)
         usable = [p for p in self._by_seat.get((cycle, seat_key), [])
                   if _to_date(p["poll_date"]) <= cutoff]
         if not usable:
-            return None, 0, None
+            return None, 0, None, 0.0
         weight_sum = value_sum = 0.0
         for p in usable:
             age = (cutoff - _to_date(p["poll_date"])).days
@@ -256,7 +296,8 @@ class PollLookup:
             weight_sum += weight
             value_sum += weight * p["dem_margin"]
         last = max(p["poll_date"] for p in usable)
-        return (value_sum / weight_sum if weight_sum > 0 else None), len(usable), last
+        return ((value_sum / weight_sum if weight_sum > 0 else None),
+                len(usable), last, weight_sum)
 
 
 def _to_date(value: str) -> date:
@@ -267,6 +308,11 @@ def clip(value: float, bound: float = PRIOR_CLIP) -> float:
     return max(-bound, min(bound, value))
 
 
+def polls_are_current(weight: float) -> bool:
+    """Is a seat's polling still evidence, or has it decayed to nothing?"""
+    return weight >= MIN_POLL_WEIGHT
+
+
 def build_row(seat_key: str, cycle: int, chamber: str, state: str,
               district: str | None, results: ResultLookup, poll_lookup: PollLookup,
               as_of: str, actual_margin: float | None = None,
@@ -275,7 +321,14 @@ def build_row(seat_key: str, cycle: int, chamber: str, state: str,
               redraw_adjust: "RedrawAdjust | None" = None,
               rating_lookup: "object | None" = None) -> FeatureRow:
     prior_margin, prior_cycle = results.prior(cycle, seat_key, chamber)
-    poll_avg, poll_count, last_poll = poll_lookup.average(cycle, seat_key, as_of)
+    poll_avg, poll_count, last_poll, poll_weight = poll_lookup.summary(
+        cycle, seat_key, as_of)
+    if not polls_are_current(poll_weight):
+        # Decayed to nothing: the seat is in the same evidentiary position as
+        # one that was never polled, so it is treated as one -- fundamentals
+        # tier, unpolled uncertainty, and no data-grade credit (or penalty)
+        # for a poll that no longer says anything.
+        poll_avg, poll_count, last_poll = None, 0, None
     gb_avg, gb_count, _ = poll_lookup.average(cycle, GENERIC_BALLOT_SEAT, as_of)
     environment, midterm_environment = environment_signs(cycle)
     lean_value, lean_cycle = (state_lean.lean(state, cycle) if state_lean else (None, None))
@@ -338,6 +391,8 @@ def build_row(seat_key: str, cycle: int, chamber: str, state: str,
         poll_count=poll_count, last_poll_date=last_poll, has_prior=has_prior,
         detail={"prior_cycle": prior_cycle, "as_of": as_of,
                 "state_lean_cycle": lean_cycle, "redrawn": redrawn,
+                "poll_weight": round(poll_weight, 5),
+                "polls_current": has_polls,
                 "ratings": rating_summary})
 
 

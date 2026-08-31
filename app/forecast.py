@@ -34,7 +34,7 @@ CYCLE = 2026
 # snapshots are immutable per (race_id, as_of, model_version): a same-day
 # rerun under an unchanged version keeps the day's first frozen numbers, so a
 # real prediction-affecting change must bump the version to surface.
-MODEL_VERSION = "2026.20"
+MODEL_VERSION = "2026.21"
 # Release-gate floor: the 2026 map has 153 House seats and all 35 Senate seats
 # on the published ratings pages. Anything far below that means the ratings
 # ingest failed and the forecast would silently fall back to history alone.
@@ -491,7 +491,7 @@ RESEARCH_CLAIMS = [
                  "at the time; re-testing after the Senate-data and champion-selection changes "
                  "reversed it, which is why estimator choice is re-run rather than assumed.",
      "source": "This project's walk-forward backtests, in response to a user topline-statistic idea"},
-    {"id": "P-006", "claim": "FIXED: win probabilities were derived from MARGIN-SIZE uncertainty, "
+    {"id": "P-007", "claim": "FIXED: win probabilities were derived from MARGIN-SIZE uncertainty, "
                              "which made genuinely safe seats read as competitive and erased "
                              "toss-ups.",
      "chamber": "both", "metric": "Brier / log loss / winner accuracy, walk-forward 2010-2024",
@@ -726,6 +726,108 @@ RESEARCH_CLAIMS.extend([
                  "the national level -- only for the spread between seats.",
      "source": "First implementation attempt of R-001, kept because the negative "
                "result is what justifies the overlay's shape"},
+    {"id": "PL-001",
+     "claim": "ACCEPTED: polling is by a wide margin the model's most valuable "
+              "seat-level input and must not be discounted for being "
+              "inaccurate -- removing it entirely costs House margin MAE "
+              "6.56 -> 20.02 and Brier 0.1214 -> 0.2109 on polled seats, and "
+              "Senate MAE 5.53 -> 13.88 and Brier 0.0462 -> 0.1247, worse in "
+              "every single held-out cycle including 2016 and 2020.",
+     "chamber": "both",
+     "metric": "walk-forward margin MAE and Brier on the polled slice, 2004-2022",
+     "mechanism": "Polls are the only current, seat-specific measurement the "
+                  "model has. Everything else (prior margin, state lean, the "
+                  "national environment) describes a different election.",
+     "status": "Champion component",
+     "validation": "Measured against corrected MEDSL returns under the same "
+                   "expanding-window protocol as every other claim, comparing "
+                   "the champion with an identical model whose every race is "
+                   "routed to the fundamentals tier. The comparison is run on "
+                   "the polled slice only -- the races polls can actually "
+                   "affect, and the ones the fundamentals tier is weakest on.",
+     "decision": "Keep polls at full weight where they are current.",
+     "source": "User: polling has not always been accurate, especially lately, "
+               "especially with Susan Collins"},
+    {"id": "PL-002",
+     "claim": "REJECTED: scaling a seat\'s poll average by a continuous "
+              "confidence factor weight/(weight+k) makes the forecast worse at "
+              "every k tested. House Brier at the election-eve cutoff: 0.1211 "
+              "(k=0, unscaled) -> 0.1240 (k=0.5) -> 0.1284 (k=1) -> 0.1341 "
+              "(k=2) -> 0.1412 (k=4); Senate and the 30-days-out cutoff "
+              "degrade in the same order.",
+     "chamber": "both",
+     "metric": "walk-forward Brier/log loss/MAE at election-eve and 30-day cutoffs",
+     "mechanism": "Historically a polled seat is a WELL-polled seat -- at "
+                  "election eve the median House seat carries 0.72 fresh-poll "
+                  "equivalents of decay weight and the median Senate seat "
+                  "3.57 -- so a continuous discount mostly attenuates polls "
+                  "that had earned their weight.",
+     "status": "Rejected challenger",
+     "validation": "Swept k over 0.5/1/2/4 in both chambers at both cutoffs; "
+                   "monotone degradation, no crossover.",
+     "decision": "Discount nothing that is current; use a floor instead (PL-003). Consistent with P-002, which found the fitted poll coefficient already at 0.886 (House) / 0.967 (Senate).",
+     "source": "PL-001 follow-up"},
+    {"id": "PL-003",
+     "claim": "ACCEPTED: a seat whose polling has decayed below 0.05 "
+              "fresh-poll equivalents (one lone poll at ~91 days) is treated "
+              "as unpolled. Historically a wash -- House polled Brier 0.1214 "
+              "-> 0.1201 and MAE 6.56 -> 6.29, Senate 0.0462 -> 0.0450 -- "
+              "because the case barely exists in the backtest population; it "
+              "exists on the live board.",
+     "chamber": "both",
+     "metric": "walk-forward Brier/MAE on the polled slice, plus 2026 coverage",
+     "mechanism": "`has_polls` was a binary ever-polled flag, so an ancient "
+                  "poll set the flag, entered the average at full strength and "
+                  "routed the seat to the polls-only model tier. In 2026 three "
+                  "of the five polled seats sit at weight 0.003 or less: "
+                  "senate-NC carried a single November 2025 poll reading D+10 "
+                  "in North Carolina at weight 0.00006, driving the forecast "
+                  "exactly as hard as Montana\'s ten polls from the previous "
+                  "three weeks.",
+     "status": "Champion component",
+     "validation": "Weight floors of 0.02/0.05/0.10 are statistically "
+                   "indistinguishable from no floor on 2004-2022 (House Brier "
+                   "0.1211 -> 0.1209); 0.25 and above start to hurt, which is "
+                   "where the floor would begin discarding real polling. "
+                   "Historically only 5% of polled House seats and 0.3% of "
+                   "polled Senate seats fall below 0.10 at election eve, so "
+                   "the backtest can bound the floor\'s cost but cannot show "
+                   "its benefit -- that is visible only on a live board whose "
+                   "polling is nine months old.",
+     "decision": "Set MIN_POLL_WEIGHT = 0.05. A demoted seat also drops its "
+                 "data-grade poll credit AND its staleness penalty: it is in "
+                 "the same evidentiary position as a seat nobody polled.",
+     "source": "User: some races have polling and some don\'t"},
+    {"id": "PL-004",
+     "claim": "NOT ACTIONABLE: poll bias does not persist between cycles, so "
+              "no fixed correction can be applied. Signed error (poll average "
+              "minus actual Dem margin) by cycle: 2012 -3.92, 2014 +5.03, "
+              "2016 +5.16, 2018 -0.73, 2020 +7.04, 2022 +0.92. The mean is "
+              "+2.63 since 2016 and +0.04 before it, but the cycle-to-cycle "
+              "standard deviation of that mean is ~3.2 points -- as large as "
+              "the effect being corrected.",
+     "chamber": "both",
+     "metric": "signed poll error vs certified returns, 1,433 polled "
+               "seat-cycles 1998-2022",
+     "mechanism": "Polling error is dominated by a cycle-level shock shared "
+                  "across seats (2020 overstated Democrats by 7 points almost "
+                  "everywhere -- the Susan Collins case is the visible "
+                  "instance of a national pattern, not a Maine anomaly), and "
+                  "the sign of that shock is not predictable from prior "
+                  "cycles.",
+     "status": "Rejected challenger",
+     "validation": "Recomputed after the MEDSL party-column fix; the two "
+                   "largest apparent misses in the raw series (senate-MD and "
+                   "senate-IL 2022, each showing a 115-125 point error) were "
+                   "data corruption, not polling error.",
+     "decision": "Do not de-bias polls. The correlated component is already "
+                 "carried where it belongs: per-race intervals are fitted on "
+                 "residuals pooled across good and bad polling years (polled "
+                 "80% coverage 0.79-0.80 in both chambers, though 0.65 in 2020 "
+                 "and 0.90 in 2022), and the chamber-control simulation draws "
+                 "a shared national shock sized from out-of-sample cycle-level "
+                 "error (5.75 House / 3.79 Senate points; claim P-001).",
+     "source": "User: polling has not always been accurate, especially lately"},
     {"id": "R-004",
      "claim": "ACCEPTED: on a seat whose district was redrawn after its most "
               "recent result, the expert consensus should fully replace the "

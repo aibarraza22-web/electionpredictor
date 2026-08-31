@@ -8,7 +8,14 @@ Three fits per chamber, routed by what data actually exists for a race so the
 model never extrapolates through a feature absent at prediction time:
 
 * **full** — fundamentals + time-decayed race-polling average (21-day
-  half-life, partisan polls down-weighted); applied to races with polls.
+  half-life, partisan polls down-weighted); applied to races with *current*
+  polls. Currency is measured, not assumed: a poll contributes to the seat's
+  decay weight on the same 21-day half-life, and below 0.05 fresh-poll
+  equivalents — one lone poll at about 91 days — the seat is routed to the
+  fundamentals tier and carries unpolled uncertainty. Polls are otherwise
+  taken at full strength; discounting current polling by a continuous
+  confidence factor was tested walk-forward and made every metric worse in
+  both chambers (research claims PL-001 to PL-004).
 * **fundamentals** — race-poll columns excluded, generic-ballot columns kept;
   applied to unpolled races when national generic-ballot polling exists for
   the cycle *and* the champion spec uses it (see below).

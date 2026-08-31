@@ -239,3 +239,44 @@ def test_votehub_quality_gate_and_special_election_seats(temp_db):
     # Ohio 2026 is a special election, so that is where its polls belong
     assert votehub._senate_seat_for_state("OH") == "senate-OH-special"
     assert votehub._senate_seat_for_state("MI") == "senate-MI"
+
+
+def test_major_party_reads_both_party_columns():
+    """Regression: MEDSL codes Chris Van Hollen (MD 2022) and Tammy Duckworth
+    (IL 2022) as ``OTHER`` in ``party_simplified`` while ``party_detailed``
+    says ``DEMOCRATIC``. Reading only the simplified column dropped their votes
+    and stored two Democratic Senate wins as R+100."""
+    assert medsl.major_party(
+        {"party_detailed": "DEMOCRATIC", "party_simplified": "OTHER"}) == "D"
+    assert medsl.major_party(
+        {"party_detailed": "REPUBLICAN (NOT IDENTIFIED ON BALLOT)"}) == "R"
+    assert medsl.major_party({"party": "INDEPENDENT-REPUBLICAN"}) == "R"
+    assert medsl.major_party({"party": "DEMOCRATIC-NONPARTISAN LEAGUE"}) == "D"
+    # A label that merely contains a major party's name is not that party.
+    for minor in ("DEMOCRATIC SOCIALIST", "NATIONAL DEMOCRATIC PARTY OF ALABAMA",
+                  "ALOHA DEMOCRATIC", "INDEPENDENT REPUBLICAN PARTY", "LIBERTARIAN"):
+        assert medsl.major_party({"party_detailed": minor}) is None, minor
+
+
+def test_write_in_counts_only_when_it_is_a_real_candidacy():
+    # Ron Packard won CA-43 in 1982 as a Republican write-in with 37%.
+    assert medsl.major_party({"party": "REPUBLICAN", "writein": "TRUE",
+                              "candidatevotes": "66444",
+                              "totalvotes": "180736"}) == "R"
+    # A shadow write-in in a seat no Democrat contested is not a Democratic
+    # candidacy; counting it would store an uncontested seat as D-96.
+    assert medsl.major_party({"party": "DEMOCRATIC", "writein": "TRUE",
+                              "candidatevotes": "5145",
+                              "totalvotes": "251000"}) is None
+
+
+def test_real_senate_wins_are_not_stored_as_hundred_point_losses():
+    rows = medsl.parse(medsl.BUNDLED_SENATE_FILE.read_bytes(), "senate")
+    by = {(r["cycle"], r["seat_key"]): r["dem_margin"] for r in rows}
+    assert abs(by[(2022, "senate-MD")] - 31.7) < 1.5   # Van Hollen ~+31.7
+    assert abs(by[(2022, "senate-IL")] - 15.6) < 1.5   # Duckworth ~+15.6
+    assert abs(by[(2000, "senate-GA-special")] - 21.1) < 1.5  # Zell Miller
+    house = medsl.parse(medsl.BUNDLED_HOUSE_FILE.read_bytes(), "house")
+    by_house = {(r["cycle"], r["seat_key"]): r["dem_margin"] for r in house}
+    assert abs(by_house[(2024, "house-ND-01")] - (-39.0)) < 2.0   # Fedorchak
+    assert abs(by_house[(1992, "house-MN-03")] - (-31.4)) < 2.0   # Ramstad

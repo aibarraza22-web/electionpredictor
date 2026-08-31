@@ -11,13 +11,13 @@ from __future__ import annotations
 import json
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from . import db, store
+from . import db, features, store
 from .dashboard import DASHBOARD_HTML
 from .forecast import MODEL_VERSION
 from .ratings import RatingLookup
@@ -199,9 +199,22 @@ def race_polls(race_id: str):
     if not race:
         raise HTTPException(404)
     rows = store.polls_for_seat(race["seat_key"], race["cycle"])
-    return {"race_id": race_id, "polls": rows,
-            "note": None if rows else "No ingested polls for this race yet; "
-                                      "nothing is fabricated in their place."}
+    if not rows:
+        return {"race_id": race_id, "polls": [], "current": False, "weight": 0.0,
+                "note": "No ingested polls for this race yet; "
+                        "nothing is fabricated in their place."}
+    as_of = store.get_meta("last_forecast_as_of") or store.now()
+    _margin, _count, last, weight = features.PollLookup(rows).summary(
+        race["cycle"], race["seat_key"], as_of)
+    current = features.polls_are_current(weight)
+    age = (date.fromisoformat(as_of[:10]) - date.fromisoformat(str(last)[:10])).days
+    return {"race_id": race_id, "polls": rows, "current": current,
+            "weight": round(weight, 5), "newest_poll_age_days": age,
+            "note": None if current else
+                    f"The newest poll here is {age} days old. Its weight has "
+                    "decayed below the point where it is evidence, so the model "
+                    "treats this race as unpolled and widens its uncertainty "
+                    "rather than forecasting from a stale number."}
 
 
 @app.get("/api/races/{race_id}/finance")

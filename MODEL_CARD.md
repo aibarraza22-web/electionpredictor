@@ -1,6 +1,6 @@
 # Model card
 
-**Model version:** 2026.19 — chamber-specific ridge regressions
+**Model version:** 2026.20 — chamber-specific ridge regressions
 (fundamentals + polling tiers) trained on ingested primary-source history,
 blended with a walk-forward-fitted overlay on published expert race ratings,
 then a bounded campaign-development adjustment. Each layer is attributed
@@ -32,10 +32,20 @@ current-cycle coverage. Results are stored and served at
   the overlay's weight is capped at 0.75 and its interval is widened 1.45x
   for the gap between the final-vintage ratings it is fitted on and the
   months-out ratings it is applied to.
-* The overlay does not act on House seats every rater calls safe — that is
-  outside the population its slope was fitted on. Where the model calls such
-  a seat competitive anyway, the disagreement is published
-  (`competitive_but_consensus_safe`) rather than reconciled.
+* The overlay does not act on **settled** House seats every rater calls safe —
+  that is outside the population its slope was fitted on. Where the model
+  calls such a seat competitive anyway, the disagreement is published
+  (`competitive_but_consensus_safe`) rather than reconciled. Redrawn seats are
+  the exception and do get the overlay, because there the stale prior is the
+  thing that is wrong.
+* Mid-decade redistricting is tracked in `app/redistricting.py` as a hand-
+  maintained, sourced list of states with new 2026 maps. **A state missing
+  from that list keeps a prior margin describing boundaries that no longer
+  exist** — Tennessee and Alabama were both missing until model 2026.20, and
+  TN-09 published as a toss-up off a D+48 prior for a district that has since
+  been split. The run's model-versus-consensus sign-conflict report exists to
+  surface that failure mode; the list still has to be maintained by hand as
+  further maps are enacted or struck down.
 * Expert ratings are other forecasters' judgements, not primary observation.
   Using them imports their errors, and their correlation with each other
   means the consensus is narrower evidence than the rater count suggests.

@@ -16,7 +16,9 @@ R-002 is the rejected first attempt at the same data (the consensus as a plain
 model feature, which made those seats worse) and is kept because the negative
 result is what determined the overlay's shape. R-003 records the release gates
 that now refuse to publish a model version whose competitive-race numbers do
-not actually move.
+not actually move. R-004 extends the overlay with a `redrawn` stratum: where a
+seat's district prior is stale, the held-out fit says the expert consensus
+should replace the model's margin outright.
 
 The working hypotheses are that excellent execution can sometimes explain a
 modest one-to-three-point departure from fundamentals, while a much larger

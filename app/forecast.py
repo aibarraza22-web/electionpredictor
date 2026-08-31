@@ -34,7 +34,7 @@ CYCLE = 2026
 # snapshots are immutable per (race_id, as_of, model_version): a same-day
 # rerun under an unchanged version keeps the day's first frozen numbers, so a
 # real prediction-affecting change must bump the version to surface.
-MODEL_VERSION = "2026.19"
+MODEL_VERSION = "2026.20"
 # Release-gate floor: the 2026 map has 153 House seats and all 35 Senate seats
 # on the published ratings pages. Anything far below that means the ratings
 # ingest failed and the forecast would silently fall back to history alone.
@@ -726,6 +726,39 @@ RESEARCH_CLAIMS.extend([
                  "the national level -- only for the spread between seats.",
      "source": "First implementation attempt of R-001, kept because the negative "
                "result is what justifies the overlay's shape"},
+    {"id": "R-004",
+     "claim": "ACCEPTED: on a seat whose district was redrawn after its most "
+              "recent result, the expert consensus should fully replace the "
+              "model's margin -- fitted blend weight 1.00 for the redrawn "
+              "stratum versus 0.75 elsewhere, held-out log loss 0.3928 vs "
+              "0.4023 at 0.75.",
+     "chamber": "house",
+     "metric": "walk-forward log loss on rated seats whose district prior is stale",
+     "mechanism": "A redrawn seat's prior margin describes boundaries that no "
+                  "longer exist, so the model's single strongest feature is "
+                  "known-wrong for exactly that seat, while the handicappers "
+                  "are looking at the new map.",
+     "status": "Champion component",
+     "validation": "The 2022 cycle is the natural experiment: post-2020-census "
+                   "maps took effect that year, so every 2022 House seat's 2020 "
+                   "prior is stale while 2018/2020/2024 priors are not. That "
+                   "gives 95 held-out redrawn rated seats, fitted under the same "
+                   "walk-forward protocol as every other weight. The redrawn "
+                   "stratum also has the TIGHTEST fitted residual sigma of the "
+                   "three (4.84 vs 6.89 polled and 10.28 unpolled). Overall "
+                   "House rated-seat metrics improved with it: Brier 0.1325 -> "
+                   "0.1315, winner accuracy 0.8449 -> 0.8490, MAE 6.00 -> 5.90.",
+     "decision": "Fit and apply a third `redrawn` stratum with a 1.00 ceiling, "
+                 "and lift the unanimously-safe exclusion for those seats -- it "
+                 "was stranding the worst cases (CA-40 published D+22.8 while "
+                 "all raters said Safe Republican, purely because its consensus "
+                 "landed on exactly -4.0). Redrawn seats are fitted and applied "
+                 "on the same population, and the fitted consensus range "
+                 "(+/-3.89) makes applying at +/-4.0 a negligible extrapolation; "
+                 "redrawn seats rated -3.89 historically finished at -19 to -24 "
+                 "points.",
+     "source": "User: the prior margin is not adjusted for redistricting -- TN-09 "
+               "reads lean-Dem on a prior that redistricting has superseded"},
     {"id": "R-003",
      "claim": "A model version that does not change the published competitive-race "
               "numbers must not be publishable.",
@@ -1070,7 +1103,8 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
         overlay = overlays[race["chamber"]]
         prediction, overlay_detail = overlay.apply(
             model_prediction, consensus_of(row), overlay_context[race["chamber"]],
-            polled=row.poll_count > 0, summary=rating_summary)
+            polled=row.poll_count > 0, summary=rating_summary,
+            redrawn=bool(row.detail.get("redrawn")))
         finance = finance_context(by_finance.get(race["seat_key"], []), as_of,
                                   ELECTION_DATE, chamber=race["chamber"])
         party_by_candidate = {
@@ -1125,6 +1159,10 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
                                     "rated": bool(rating_summary),
                                     "chamber": race["chamber"],
                                     "consensus_safe": is_unanimously_safe(rating_summary),
+                                    "model_margin": round(model_prediction.mean, 2),
+                                    "published_margin": round(final_mean, 2),
+                                    "redrawn": bool(row.detail.get("redrawn")),
+                                    "consensus": (rating_summary or {}).get("consensus"),
                                     "quality": payload["quality"],
                                     "rating": payload["rating"],
                                     "dem_probability": payload["dem_probability"]}
@@ -1204,11 +1242,35 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     # silently split down the middle (the overlay's slope is not fitted for
     # that range, see app.ratings.overlay_consensus) and not silently hidden
     # either: published as a named disagreement so it can be argued with.
+    # The model and the handicappers pointing at DIFFERENT PARTIES on the same
+    # seat is not a close call -- it means one of the model's inputs is wrong
+    # for that seat. It is how the missing Tennessee and Alabama redraws were
+    # found (TN-09 read D+57 from Steve Cohen's pre-split prior while all ten
+    # raters called it Republican), so the run reports it rather than leaving
+    # it to be noticed on the site.
+    sign_conflicts = sorted(
+        ({"race_id": race_id,
+          "model_margin": meta["model_margin"],
+          "consensus": meta["consensus"],
+          "published_margin": meta["published_margin"],
+          "redrawn": meta["redrawn"],
+          # Whether the published margin ended up agreeing with the raters.
+          # An UNCORRECTED conflict is the one that needs a human: it means
+          # neither the model nor the overlay could reconcile the seat.
+          "corrected": (meta["published_margin"] > 0) == (meta["consensus"] > 0)}
+         for race_id, meta in feature_meta.items()
+         if meta.get("consensus") is not None and meta["model_margin"] is not None
+         and (meta["model_margin"] > 0) != (meta["consensus"] > 0)
+         and abs(meta["model_margin"]) >= 5.0 and abs(meta["consensus"]) >= 1.0),
+        key=lambda item: -abs(item["model_margin"]))
     consensus_safe_conflicts = sorted(
         race_id for race_id, meta in feature_meta.items()
         if meta.get("consensus_safe") and meta.get("chamber") == "house"
         and meta["rating"] in gates.COMPETITIVE_RATINGS)
     coverage["competitive_but_consensus_safe"] = len(consensus_safe_conflicts)
+    coverage["model_vs_consensus_sign_conflicts"] = len(sign_conflicts)
+    coverage["model_vs_consensus_sign_conflicts_uncorrected"] = sum(
+        1 for c in sign_conflicts if not c["corrected"])
     coverage["competitive_races"] = len(gates.competitive_races(snapshots))
     coverage["competitive_races_grade_a_or_b"] = sum(
         1 for p in gates.competitive_races(snapshots)
@@ -1218,6 +1280,8 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
         {chamber: overlay.to_json() for chamber, overlay in overlays.items()}))
     store.set_meta("competitive_but_consensus_safe",
                    json.dumps(consensus_safe_conflicts))
+    store.set_meta("model_vs_consensus_sign_conflicts",
+                   json.dumps(sign_conflicts[:25]))
     store.set_meta("release_gates", json.dumps(
         {"run_at": store.now(), "model_version": MODEL_VERSION,
          "enforced": enforce_gates, "results": gate_results}))
@@ -1225,6 +1289,7 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
             "snapshots_inserted": inserted, "coverage": coverage,
             "expert_rating_overlay": {c: o.to_json() for c, o in overlays.items()},
             "competitive_but_consensus_safe": consensus_safe_conflicts,
+            "model_vs_consensus_sign_conflicts": sign_conflicts[:25],
             "release_gates": gate_results,
             "control": {k: {"democratic_control_probability": v["democratic_control_probability"]}
                         for k, v in control.items()},

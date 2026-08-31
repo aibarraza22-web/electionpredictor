@@ -71,6 +71,19 @@ MIDDECADE_REMAP_CYCLE: dict[str, int] = {
     # expected to be used in November 2026. 2024 results are on the
     # struck-down map.
     "LA": 2026,
+    # Tennessee enacted a new map for 2026 ("2026 Tennessee redistricting"),
+    # documented on the cycle's redistricting summary as -1 Democratic seat
+    # and +1 Republican: the Memphis-based 9th, the state's only Democratic
+    # district, is split. Without this entry TN-09 kept Steve Cohen's D+48
+    # prior on boundaries that no longer exist and the model published it as a
+    # toss-up while all ten handicappers rated it Republican.
+    "TN": 2026,
+    # Alabama redrew after Louisiana v. Callais (Apr 2026); the state court
+    # blocked the map and the Supreme Court stayed that block (Jun 2, 2026),
+    # putting it in effect for 2026. The summary records -1 highly competitive
+    # and +1 Republican seat -- the 2nd, drawn as a second Black-opportunity
+    # district under Allen v. Milligan and won by a Democrat in 2024.
+    "AL": 2026,
     # Florida's legislature passed, and Gov. DeSantis signed (May 4, 2026), a
     # new GOP-favored map reworking 21 of 28 districts; the Florida Supreme
     # Court denied an injunction (Jun 10-11, 2026), leaving it in effect for
@@ -119,6 +132,8 @@ NET_DEM_SEAT_SHIFT: dict[str, int] = {
     "MO": -1,  # dismantled the KC-area 5th (Cleaver) district
     "NC": -1,  # weakened the 1st (Davis) district
     "LA": -1,  # Callais eliminated the 2nd majority-Black (D) district
+    "TN": -1,  # -1 D / +1 R on the enacted map: the Memphis 9th is split
+    "AL": -1,  # -1 highly competitive / +1 R: the 2nd reverts to Republican
     "CA": +5,  # Prop 50 counter-gerrymander approved by voters (Nov 2025)
     "UT": +1,  # court-ordered remedial map created one D-leaning seat
 }

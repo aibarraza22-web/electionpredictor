@@ -1,3 +1,4 @@
+from app import features
 from app.features import (PollLookup, RedrawAdjust, ResultLookup, StateLean,
                           build_row, environment_signs)
 
@@ -134,3 +135,55 @@ def test_redraw_adjust_only_applies_to_redrawn_target_seats():
     hist = build_row("house-CA-30", 2024, "house", "CA", "30", results, polls,
                      "2024-11-05", holder_party="R", redraw_adjust=adj)
     assert hist.detail["redrawn"] is False
+
+
+def _poll(seat, date_, margin, cycle=2026):
+    return {"cycle": cycle, "seat_key": seat, "poll_date": date_,
+            "dem_margin": margin, "partisan": None}
+
+
+def test_poll_summary_reports_the_evidence_behind_the_average():
+    polls = PollLookup([_poll("senate-MT", "2026-08-01", -19.0),
+                        _poll("senate-MT", "2026-08-04", -19.2)])
+    margin, count, last, weight = polls.summary(2026, "senate-MT", "2026-08-04")
+    assert count == 2 and last == "2026-08-04"
+    # Two polls, one fresh and one three days old: just under two fresh-poll
+    # equivalents, and far above the staleness floor.
+    assert 1.8 < weight < 2.0 and features.polls_are_current(weight)
+    assert margin < -18.0
+
+
+def test_a_poll_that_has_decayed_to_nothing_is_not_polling():
+    """Regression: senate-NC went into the 2026 forecast carrying a single
+    November 2025 poll reading D+10 in North Carolina. Its decay weight was
+    0.00006 -- 0.006% of one fresh poll -- yet has_polls was 1.0, the average
+    entered the margin equation at full strength, and the seat was routed to
+    the polls-only model tier, all on the same footing as Montana's ten polls
+    from the previous three weeks."""
+    results = ResultLookup([_result(2020, "senate-NC", -1.8)])
+    stale = PollLookup([_poll("senate-NC", "2025-11-10", 10.1)])
+    fresh = PollLookup([_poll("senate-NC", "2026-08-25", 10.1)])
+    common = dict(seat_key="senate-NC", cycle=2026, chamber="senate", state="NC",
+                  district=None, results=results, as_of="2026-08-31")
+    stale_row = build_row(poll_lookup=stale, **common)
+    fresh_row = build_row(poll_lookup=fresh, **common)
+    poll_average = features.FEATURE_NAMES.index("poll_average")
+    has_polls = features.FEATURE_NAMES.index("has_polls")
+
+    assert stale_row.poll_count == 0 and stale_row.last_poll_date is None
+    assert stale_row.x[poll_average] == 0.0 and stale_row.x[has_polls] == 0.0
+    assert stale_row.detail["polls_current"] is False
+
+    assert fresh_row.poll_count == 1 and fresh_row.x[has_polls] == 1.0
+    assert abs(fresh_row.x[poll_average] - 10.1) < 0.5
+    assert fresh_row.detail["polls_current"] is True
+
+
+def test_the_staleness_floor_is_about_three_months_for_a_lone_poll():
+    # 0.5 ** (days / 21) crosses MIN_POLL_WEIGHT (0.05) at ~91 days, so a
+    # single poll counts for about a quarter and a well-polled seat much longer.
+    lone = PollLookup([_poll("senate-ME", "2026-06-15", 2.0)])
+    assert features.polls_are_current(
+        lone.summary(2026, "senate-ME", "2026-08-15")[3])       # 61 days
+    assert not features.polls_are_current(
+        lone.summary(2026, "senate-ME", "2026-10-15")[3])       # 122 days

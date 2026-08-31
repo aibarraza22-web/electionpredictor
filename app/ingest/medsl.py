@@ -240,7 +240,7 @@ def _ingest_bundled(chamber: str) -> dict:
     path = BUNDLED_FILES[chamber]
     payload = path.read_bytes()
     rows = parse(payload, chamber)
-    inserted = store.insert_rows("election_results", rows)
+    inserted = store.upsert_results(rows)
     provenance = (BUNDLED_HOUSE_PROVENANCE_URL if chamber == "house"
                   else BUNDLED_SENATE_PROVENANCE_URL)
     store.record_source(
@@ -278,7 +278,7 @@ def ingest(chambers: tuple[str, ...] = ("house", "senate")) -> dict:
             rows = parse(payload, chamber)
             if not rows:
                 continue
-            inserted = store.insert_rows("election_results", rows)
+            inserted = store.upsert_results(rows)
             store.record_source(
                 SOURCE, f"{DATAVERSE}/api/access/datafile/{file_id}", LICENSE,
                 available_at=store.now(), sha256=sha256(payload),

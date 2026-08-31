@@ -471,7 +471,9 @@ async function openDetail(id){
   try{
     const [polls,hist]=await Promise.all([j(`/api/races/${id}/polls`), j(`/api/races/${id}/history`)]);
     $("#dPolls").innerHTML= polls.polls.length
-      ? `<b>${polls.polls.length} ingested polls.</b> Latest: `+polls.polls.slice(-3).reverse().map(p=>`${esc(p.pollster)} ${esc(p.poll_date)}: <span class="mono">${sgn(p.dem_margin)}</span>`).join(" · ")
+      ? `<b>${polls.polls.length} ingested poll${polls.polls.length===1?"":"s"}.</b> Latest: `
+        +polls.polls.slice(-3).reverse().map(p=>`${esc(p.pollster)} ${esc(p.poll_date)}: <span class="mono">${sgn(p.dem_margin)}</span>`).join(" · ")
+        +(polls.current===false&&polls.note?`<div class="muted" style="margin-top:.35rem">${esc(polls.note)}</div>`:"")
       : `<span class="muted">${esc(polls.note||"No polls ingested for this race — the model widens uncertainty instead of assuming a tie.")}</span>`;
     $("#dHist").textContent="Frozen snapshots: "+hist.map(h=>`${h.as_of} (${(h.dem_probability*100).toFixed(1)}%)`).join(" → ");
   }catch(e){ $("#dPolls").textContent=""; }

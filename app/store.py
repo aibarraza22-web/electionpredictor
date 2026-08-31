@@ -128,6 +128,37 @@ def finance_for_seat(seat_key: str, cycle: int) -> list[dict]:
     return [dict(r._mapping) for r in rows]
 
 
+def upsert_results(rows: Sequence[dict]) -> int:
+    """Insert election results, overwriting a source's own earlier numbers.
+
+    ``insert_rows`` ignores conflicts, which is right for append-only feeds but
+    wrong for certified returns: when a *parsing* fix changes a margin already
+    in the database (e.g. the MEDSL party-column fix that turned two 2022
+    Senate seats from a fabricated R+100 into the real Democratic wins), an
+    insert-ignore re-ingest is a silent no-op and production keeps serving the
+    bad number forever. Keyed on the table's own uniqueness constraint
+    (cycle, seat_key, source), so one source can never overwrite another's.
+    """
+    if not rows:
+        return 0
+    t = db.election_results
+    allowed = {c.name for c in t.columns if c.name != "id"}
+    changed = 0
+    with db.get_engine().begin() as c:
+        for raw in rows:
+            row = {k: v for k, v in raw.items() if k in allowed}
+            key = (t.c.cycle == row["cycle"], t.c.seat_key == row["seat_key"],
+                   t.c.source == row["source"])
+            existing = c.execute(select(t.c.id, t.c.dem_margin).where(*key)).fetchone()
+            if existing is None:
+                c.execute(t.insert().values(**row))
+                changed += 1
+            elif existing.dem_margin != row["dem_margin"]:
+                c.execute(update(t).where(t.c.id == existing.id).values(**row))
+                changed += 1
+    return changed
+
+
 def upsert_finance_latest(rows: Sequence[dict]) -> int:
     """Maintain the legacy one-row-per-candidate finance view.
 

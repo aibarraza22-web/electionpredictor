@@ -46,9 +46,35 @@ the shared Safe/Likely/Lean/Tilt/Tossup ladder (Democratic positive).
 the national environment still comes entirely from the fitted model and no
 outcome is ever consulted. `slope` is fitted in within-cycle deviation form on
 strictly earlier cycles — 3.9 margin points per rating step for the House,
-6.1 for the Senate, stable in every held-out cycle. `w` is chosen by held-out
-log loss per chamber and separately for polled and unpolled seats, capped at
-0.75 so polls and seat history always retain weight.
+6.1 for the Senate, stable in every held-out cycle. `w` is chosen by held-out log loss per chamber and per stratum — **polled**,
+**unpolled**, and **redrawn** — capped at 0.75 for the first two so polls and
+seat history always retain weight.
+
+A **redrawn** seat is one whose district lines changed after its most recent
+result, so its prior margin describes boundaries that no longer exist: the
+model's strongest feature is known-wrong for exactly that seat, while the
+handicappers are looking at the new map. That stratum is allowed up to 1.00
+and the held-out fit takes it there (log loss 0.3908 at w=1.00 vs 0.4017 at
+0.75), with the tightest fitted residual sigma of the three (5.11, against
+6.97 polled and 10.61 unpolled). The 2022 cycle supplies the population to fit
+on: the post-2020-census maps took effect that year, so every 2022 House
+seat's 2020 prior is stale while 2018/2020/2024 priors are not — 139 held-out
+seats. See claim R-004.
+
+Redistricting history is treated as a **sequence** of map changes per state,
+not a single current map, so a state that redrew for 2022 and again for 2026
+reads as stale at both transitions. Reading only the latest map withheld 48 of
+those 143 seats — every one in a state that later remapped — which would have
+fitted the stratum on a geographically selected subset and then applied it to
+precisely the excluded states.
+
+The unanimously-safe exclusion below is lifted for redrawn seats, and has to
+be: it was stranding the worst cases. CA-40 published as D+22.8 while all ten
+raters called it Safe Republican, purely because its consensus landed on
+exactly −4.0. Redrawn seats are fitted and applied on the same population, and
+the fitted consensus range (±3.89) makes applying at ±4.0 a negligible
+extrapolation — redrawn seats rated −3.89 historically finished at −19 to −24
+points.
 
 Walk-forward over 2016–2024, scored on the seats it applies to, this is the
 largest accuracy gain in the model's history. House, 490 held-out rated
@@ -92,7 +118,12 @@ frozen, every competitive race must carry data grade A or B, a new model
 version must move at least 75% of comparable competitive races against the
 outgoing champion, and the ratings feed must have delivered current-cycle
 coverage. A failure refuses the publish and leaves the previous forecast
-live. This exists because model 2026.18 shipped a campaign layer whose
+live. The run also reports **model-versus-consensus sign conflicts** — seats
+where the fitted model and the handicappers point at different parties, which
+is the signature of a broken input rather than a close call. That report is
+how the missing Tennessee and Alabama redraws were found: TN-09 read D+57
+from Steve Cohen's pre-split Memphis prior while all ten raters called the
+seat Republican. This exists because model 2026.18 shipped a campaign layer whose
 candidate-profile and campaign-event feeds were never configured in
 production; it ran finance-only and moved the toplines by 0.1 point in the
 House and 1.4 in the Senate, and nothing noticed.

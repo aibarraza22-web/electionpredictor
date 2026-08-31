@@ -5,6 +5,8 @@ from app.domain import quality_grade
 from app.ingest import race_ratings
 from app.ratings import (RatingLookup, RatingOverlay, is_unanimously_safe,
                          overlay_consensus, rating_evidence_points)
+from app.redistricting import (NET_DEM_SEAT_SHIFT, current_map_cycle,
+                               map_change_cycles, prior_is_stale)
 
 
 NATIONAL_HOUSE_PAGE = """
@@ -261,3 +263,106 @@ def test_overlay_is_inert_without_a_rating_or_with_a_zero_weight():
 
 def test_overlay_declines_to_fit_without_enough_rated_history():
     assert RatingOverlay("house").fit([]).is_fitted is False
+
+
+def test_states_that_enacted_new_2026_maps_are_all_registered():
+    """Every state with a new map for 2026 must be flagged, or its districts
+    keep a prior margin describing boundaries that no longer exist.
+
+    Tennessee and Alabama were missing, which is how TN-09 came to publish as a
+    toss-up off Steve Cohen's pre-split D+48 Memphis prior while all ten
+    handicappers rated the seat Republican.
+    """
+    enacted = {"AL", "CA", "FL", "LA", "MO", "NC", "OH", "TN", "TX", "UT"}
+    for state in enacted:
+        assert current_map_cycle(state) == 2026, state
+        # A 2024 result predates the 2026 map, so it must read as stale.
+        assert prior_is_stale(state, 2024, 2026) is True, state
+        assert state in NET_DEM_SEAT_SHIFT, state
+    # A state that left its districts in place keeps the post-census baseline.
+    for state in ("AR", "IN", "KS", "MD", "NY", "SC"):
+        assert current_map_cycle(state) == 2022, state
+        assert prior_is_stale(state, 2024, 2026) is False, state
+
+
+class _Row:
+    def __init__(self, chamber="house", poll_count=0, redrawn=False, consensus=None):
+        self.chamber = chamber
+        self.poll_count = poll_count
+        summary = None
+        if consensus is not None:
+            n = 6
+            summary = {"consensus": consensus, "n_raters": n,
+                       "raters": [{"score": consensus}] * n}
+        self.detail = {"redrawn": redrawn, "ratings": summary}
+
+
+def test_redrawn_seats_are_their_own_overlay_stratum():
+    from app.ratings import _stratum
+    assert _stratum(_Row(poll_count=0)) == "unpolled"
+    assert _stratum(_Row(poll_count=3)) == "polled"
+    # Redrawn wins over both: the prior is known-stale, which is the stronger
+    # statement about how much the model deserves to be trusted here.
+    assert _stratum(_Row(poll_count=3, redrawn=True)) == "redrawn"
+
+
+def test_unanimous_safe_exclusion_is_lifted_for_redrawn_seats():
+    unanimous = {"consensus": -4.0, "n_raters": 10,
+                 "raters": [{"score": -4.0}] * 10}
+    # A settled House seat keeps the model's own prediction...
+    assert overlay_consensus(unanimous, "house") is None
+    assert overlay_consensus(unanimous, "house", redrawn=False) is None
+    # ...but on a redrawn seat the stale prior is the thing that is wrong, and
+    # a unanimous rating is the only current evidence about the new district.
+    assert overlay_consensus(unanimous, "house", redrawn=True) == -4.0
+    # The Senate lists every seat, so nothing is ever excluded there.
+    assert overlay_consensus(unanimous, "senate") == -4.0
+
+
+def test_overlay_weight_grid_reaches_the_redrawn_ceiling():
+    from app.ratings import (WEIGHT_GRID, MAX_OVERLAY_WEIGHT,
+                             MAX_REDRAWN_OVERLAY_WEIGHT)
+    # The grid has to span the redrawn ceiling or that stratum silently caps
+    # at the ordinary weight and the raised ceiling does nothing.
+    assert max(WEIGHT_GRID) >= MAX_REDRAWN_OVERLAY_WEIGHT
+    assert MAX_REDRAWN_OVERLAY_WEIGHT > MAX_OVERLAY_WEIGHT
+    assert MAX_OVERLAY_WEIGHT in WEIGHT_GRID
+
+
+def test_overlay_uses_the_redrawn_weight_when_applying():
+    overlay = _overlay({"unpolled": 0.5, "redrawn": 1.0},
+                       {"unpolled": 6.0, "redrawn": 5.0})
+    context = overlay.cycle_context([0.0, 4.0, -4.0], [0.0, 1.0, -1.0])
+    # A stale-prior seat the model puts at D+22 with the raters at Safe R.
+    blended, detail = overlay.apply(_StubPrediction(22.0, 20.0), -4.0, context,
+                                    polled=False, redrawn=True)
+    assert detail["stratum"] == "redrawn"
+    assert detail["blend_weight"] == 1.0
+    # At full weight the model's stale margin is replaced outright.
+    assert blended.mean == pytest.approx(-16.0)
+    assert detail["ratings_implied_margin"] == pytest.approx(-16.0)
+
+
+def test_a_state_that_redrew_twice_is_stale_at_both_transitions():
+    """Redistricting history is a sequence, not a single current map.
+
+    Treating it as one "current" cycle made prior_is_stale blind to the
+    earlier event: California returned only 2026, so a 2020 result judged
+    against the 2022 map read as fresh. That withheld 48 of the 143 rated 2022
+    seats -- every one in a state that later remapped -- from the redrawn
+    overlay stratum, fitting it on states that did NOT remap again and
+    applying it to 2026 seats in states that did.
+    """
+    assert map_change_cycles("CA") == (2022, 2026)
+    assert map_change_cycles("AR") == (2022,)
+    # Both transitions must register for a twice-redrawn state.
+    assert prior_is_stale("CA", 2020, 2022) is True    # post-2020-census redraw
+    assert prior_is_stale("CA", 2024, 2026) is True    # mid-decade redraw
+    # ...and a window containing no map change must not.
+    assert prior_is_stale("CA", 2022, 2024) is False
+    # A state that only redrew once behaves the same way at its one event.
+    assert prior_is_stale("AR", 2020, 2022) is True
+    assert prior_is_stale("AR", 2024, 2026) is False
+    # current_map_cycle still reports the latest map, for callers that want it.
+    assert current_map_cycle("CA") == 2026
+    assert current_map_cycle("AR") == 2022

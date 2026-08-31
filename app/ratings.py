@@ -149,7 +149,9 @@ def rating_evidence_points(summary: dict | None) -> int:
 # The measured cost of the cap on House rated seats is small (walk-forward log
 # loss 0.4374 at w=0.70 vs 0.4280 at w=1.00).
 MAX_OVERLAY_WEIGHT = 0.75
-WEIGHT_GRID = tuple(round(0.05 * i, 2) for i in range(0, 16))
+# Runs to 1.00 so the redrawn stratum's raised ceiling is actually
+# reachable; the ordinary strata are still capped at MAX_OVERLAY_WEIGHT.
+WEIGHT_GRID = tuple(round(0.05 * i, 2) for i in range(0, 21))
 # Below this many held-out training rows a stratum's weight is noise; it
 # inherits the chamber-wide weight instead.
 MIN_STRATUM_ROWS = 60
@@ -184,7 +186,8 @@ def is_unanimously_safe(summary: dict | None) -> bool:
         min(scores) > 0 or max(scores) < 0)
 
 
-def overlay_consensus(summary: dict | None, chamber: str) -> float | None:
+def overlay_consensus(summary: dict | None, chamber: str,
+                      redrawn: bool = False) -> float | None:
     """The consensus the overlay may act on, or ``None`` to leave the seat alone.
 
     The rule is one thing: apply the overlay only to the population its slope
@@ -202,23 +205,51 @@ def overlay_consensus(summary: dict | None, chamber: str) -> float | None:
       rating step maps a unanimous Safe rating to single-digit margin points
       when such seats actually win by twenty or more.
 
-    Where the model calls a unanimously-safe House seat competitive, the
-    forecast reports that disagreement rather than quietly splitting the
-    difference (see ``competitive_but_consensus_safe`` in the run summary).
+    The exclusion is lifted for a **redrawn** seat, and it has to be: there
+    the model's district prior describes boundaries that no longer exist, so a
+    unanimous safe rating is not weak evidence to be ignored, it is the only
+    current evidence there is. Leaving the exclusion on stranded exactly the
+    worst seats — CA-40 published as D+22.8 while all ten raters called it
+    Safe Republican, because the consensus landed on exactly -4.0. Redrawn
+    seats are therefore both FITTED and APPLIED with these seats included, so
+    the two populations still match, which is the whole point of the rule.
+
+    Where the model calls a unanimously-safe, NOT-redrawn House seat
+    competitive, the forecast still reports that disagreement rather than
+    quietly splitting the difference (``competitive_but_consensus_safe``).
     """
     if not summary:
         return None
-    if chamber == "house" and is_unanimously_safe(summary):
+    if chamber == "house" and not redrawn and is_unanimously_safe(summary):
         return None
     return summary["consensus"]
 
 
 def consensus_of(row) -> float | None:
     summary = row.detail.get("ratings") if row.detail else None
-    return overlay_consensus(summary, row.chamber)
+    redrawn = bool(row.detail.get("redrawn")) if row.detail else False
+    return overlay_consensus(summary, row.chamber, redrawn=redrawn)
+
+
+# A seat whose district was redrawn after its most recent result carries a
+# prior that describes boundaries which no longer exist -- the model's single
+# strongest feature is, for that seat, known to be wrong. The handicappers are
+# looking at the new map. So "redrawn" is its own stratum, fitted on its own
+# held-out data and allowed a higher ceiling than the ordinary cap, because
+# the usual reason for holding weight back (don't discard the model's polling
+# and seat history) does not apply when the seat history is stale.
+#
+# The 2022 cycle is the natural experiment: the post-2020-census maps took
+# effect that year, so every 2022 House seat's 2020 prior is stale while
+# 2018/2020/2024 seats' priors are not. That gives a real redrawn population
+# to fit on rather than an assumption.
+REDRAWN = "redrawn"
+MAX_REDRAWN_OVERLAY_WEIGHT = 1.0
 
 
 def _stratum(row) -> str:
+    if row.detail and row.detail.get("redrawn"):
+        return REDRAWN
     return "polled" if row.poll_count > 0 else "unpolled"
 
 
@@ -325,17 +356,20 @@ class RatingOverlay:
                 total -= (item["won"] * log(p) + (1 - item["won"]) * log(1 - p))
             return total / len(subset)
 
-        def best_weight(subset: list[dict]) -> tuple[float, dict[str, float]]:
+        def best_weight(subset: list[dict], cap: float = MAX_OVERLAY_WEIGHT
+                        ) -> tuple[float, dict[str, float]]:
             board = {w: round(log_loss(subset, w), 5) for w in WEIGHT_GRID
-                     if w <= MAX_OVERLAY_WEIGHT}
+                     if w <= cap}
             return min(board, key=board.get), board
 
         overall_weight, overall_board = best_weight(samples)
         boards = {"chamber": overall_board}
-        for stratum in ("polled", "unpolled"):
+        for stratum in ("polled", "unpolled", REDRAWN):
+            cap = (MAX_REDRAWN_OVERLAY_WEIGHT if stratum == REDRAWN
+                   else MAX_OVERLAY_WEIGHT)
             subset = [s for s in samples if s["stratum"] == stratum]
             if len(subset) >= MIN_STRATUM_ROWS:
-                weight, board = best_weight(subset)
+                weight, board = best_weight(subset, cap)
                 self.weights[stratum] = weight
                 boards[stratum] = board
             else:
@@ -346,8 +380,8 @@ class RatingOverlay:
         # coverage80 ~0.93-0.98 against a nominal 0.80). Measuring it on the
         # population the overlay actually applies to makes the published
         # interval mean what it says.
-        for stratum in ("polled", "unpolled"):
-            weight = self.weights[stratum]
+        for stratum in ("polled", "unpolled", REDRAWN):
+            weight = self.weights.get(stratum, overall_weight)
             residuals = [
                 ((1 - weight) * s["base"].mean + weight * s["implied"]) - s["actual"]
                 for s in samples if s["stratum"] == stratum]
@@ -413,7 +447,8 @@ class RatingOverlay:
         return bool(self.fit_meta.get("fitted"))
 
     def apply(self, prediction, consensus: float | None, context: dict | None,
-              polled: bool, summary: dict | None = None) -> tuple[object, dict]:
+              polled: bool, summary: dict | None = None,
+              redrawn: bool = False) -> tuple[object, dict]:
         """Return ``(blended prediction, explanation)``.
 
         With no rating, no fit, or no cycle context the model's own prediction
@@ -431,7 +466,7 @@ class RatingOverlay:
                 reason = "no fitted overlay for this chamber"
             elif context is None:
                 reason = "no rated seats in this cycle to anchor the overlay"
-            elif is_unanimously_safe(summary):
+            elif is_unanimously_safe(summary) and not redrawn:
                 reason = ("every rater calls this seat safe, which is outside "
                           "the competitive population the overlay's slope was "
                           "fitted on")
@@ -440,7 +475,7 @@ class RatingOverlay:
             else:
                 reason = "no published rating for this seat"
             return prediction, {"applied": False, "reason": reason}
-        stratum = "polled" if polled else "unpolled"
+        stratum = REDRAWN if redrawn else ("polled" if polled else "unpolled")
         weight = self.weights.get(stratum, 0.0)
         if weight <= 0.0:
             # The held-out fit says this stratum is better off with the model

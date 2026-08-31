@@ -71,6 +71,19 @@ MIDDECADE_REMAP_CYCLE: dict[str, int] = {
     # expected to be used in November 2026. 2024 results are on the
     # struck-down map.
     "LA": 2026,
+    # Tennessee enacted a new map for 2026 ("2026 Tennessee redistricting"),
+    # documented on the cycle's redistricting summary as -1 Democratic seat
+    # and +1 Republican: the Memphis-based 9th, the state's only Democratic
+    # district, is split. Without this entry TN-09 kept Steve Cohen's D+48
+    # prior on boundaries that no longer exist and the model published it as a
+    # toss-up while all ten handicappers rated it Republican.
+    "TN": 2026,
+    # Alabama redrew after Louisiana v. Callais (Apr 2026); the state court
+    # blocked the map and the Supreme Court stayed that block (Jun 2, 2026),
+    # putting it in effect for 2026. The summary records -1 highly competitive
+    # and +1 Republican seat -- the 2nd, drawn as a second Black-opportunity
+    # district under Allen v. Milligan and won by a Democrat in 2024.
+    "AL": 2026,
     # Florida's legislature passed, and Gov. DeSantis signed (May 4, 2026), a
     # new GOP-favored map reworking 21 of 28 districts; the Florida Supreme
     # Court denied an injunction (Jun 10-11, 2026), leaving it in effect for
@@ -84,12 +97,41 @@ def current_map_cycle(state: str) -> int:
     return MIDDECADE_REMAP_CYCLE.get(state, POST_CENSUS_CYCLE)
 
 
+def map_change_cycles(state: str) -> tuple[int, ...]:
+    """Every cycle at which this state started using a NEW U.S. House map.
+
+    A state's redistricting history is a SEQUENCE of events, not a single
+    current map. Every state redrew for 2022 after the 2020 census; ten of
+    them redrew again mid-decade for 2026. Collapsing that to one "current"
+    cycle made ``prior_is_stale`` blind to the earlier event: for California
+    it returned only 2026, so a 2020 result judged against the 2022 map read
+    as fresh (``2020 < 2026 <= 2022`` is false) even though the post-census
+    redraw plainly superseded it.
+
+    That mattered beyond bookkeeping. It silently withheld 48 of the 143 rated
+    2022 seats -- every one of them in a state that later remapped -- from the
+    redrawn overlay stratum, so the stratum was fitted on states that did NOT
+    remap again and then applied to 2026 seats in states that did.
+    """
+    cycles = {POST_CENSUS_CYCLE}
+    mid = MIDDECADE_REMAP_CYCLE.get(state)
+    if mid is not None:
+        cycles.add(mid)
+    return tuple(sorted(cycles))
+
+
 def prior_is_stale(state: str, prior_cycle: int, target_cycle: int) -> bool:
-    """True if a district result from ``prior_cycle`` predates the map now in
-    effect for ``target_cycle`` (i.e. it describes superseded boundaries)."""
+    """True if a district result from ``prior_cycle`` predates any map change
+    that has taken effect by ``target_cycle`` (i.e. it describes superseded
+    boundaries).
+
+    Checks EVERY map change in the window, not just the most recent one, so a
+    state that redrew twice is handled correctly at both transitions.
+    """
     if prior_cycle is None:
         return False
-    return prior_cycle < current_map_cycle(state) <= target_cycle
+    return any(prior_cycle < change <= target_cycle
+               for change in map_change_cycles(state))
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +161,8 @@ NET_DEM_SEAT_SHIFT: dict[str, int] = {
     "MO": -1,  # dismantled the KC-area 5th (Cleaver) district
     "NC": -1,  # weakened the 1st (Davis) district
     "LA": -1,  # Callais eliminated the 2nd majority-Black (D) district
+    "TN": -1,  # -1 D / +1 R on the enacted map: the Memphis 9th is split
+    "AL": -1,  # -1 highly competitive / +1 R: the 2nd reverts to Republican
     "CA": +5,  # Prop 50 counter-gerrymander approved by voters (Nov 2025)
     "UT": +1,  # court-ordered remedial map created one D-leaning seat
 }

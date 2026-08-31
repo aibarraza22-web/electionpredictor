@@ -54,8 +54,73 @@ DATASETS = {
 LICENSE = "CC0-1.0 (MIT Election Data + Science Lab)"
 SOURCE = "medsl-constituency-returns"
 
-DEM_PARTIES = {"DEMOCRAT", "DEMOCRATIC-FARMER-LABOR", "DEMOCRATIC-NPL"}
-REP_PARTIES = {"REPUBLICAN"}
+# MEDSL records the party label exactly as the state printed it, so the two
+# major parties appear under a dozen different strings across 1976-2024. The
+# sets below are an explicit allowlist, audited against every distinct label in
+# both bundled files, rather than a substring test: "Democratic Socialist"
+# (WI 1976), "National Democratic Party of Alabama" (AL 1976-80), "Aloha
+# Democratic" (HI 1978) and "Independent Republican Party" (AZ 2020, 152
+# votes) all contain a major party's name and were all minor-party lines.
+DEM_PARTIES = {
+    "DEMOCRAT",
+    "DEMOCRATIC",                      # IL/MD 2022 Senate, CT/ME/... 2024
+    "DEMOCRAT (NOT IDENTIFIED ON BALLOT)",  # GA 2000 Senate special (Miller)
+    "DEMOCRATIC-FARMER-LABOR",         # Minnesota
+    "DEMOCRATIC-FARM-LABOR",           # Minnesota, MEDSL spelling variant
+    "DEMOCRATIC-NPL",                  # North Dakota
+    "DEMOCRATIC-NONPARTISAN LEAGUE",   # North Dakota, spelled out
+    "DEMOCRATIC/WORKING FAMILIES",     # New York fusion line (Gillibrand 2024)
+}
+REP_PARTIES = {
+    "REPUBLICAN",
+    "REPUBLICAN (NOT IDENTIFIED ON BALLOT)",  # GA 2000 Senate special (Mattingly)
+    "INDEPENDENT-REPUBLICAN",          # Minnesota GOP's legal name until 1995
+    "REPUBLICAN, LIBERTARIAN",         # Vermont fusion line (Coester 2024)
+}
+
+
+# A write-in row is only counted for its party above this share of the seat's
+# total vote; see ``major_party``.
+WRITEIN_MAJOR_PARTY_SHARE = 0.05
+
+
+def major_party(row: dict) -> str | None:
+    """Classify a candidate row as "D", "R", or None (minor/other).
+
+    Reads ``party_detailed`` before ``party_simplified`` because the simplified
+    column is not always right: MEDSL codes Chris Van Hollen (MD 2022) and
+    Tammy Duckworth (IL 2022) as ``OTHER`` there while ``party_detailed`` says
+    ``DEMOCRATIC``, which dropped two real Democratic Senate wins and stored
+    both seats as R+100 -- a 130-point error in the Senate training set. The
+    simplified column is still consulted as a fallback, since it correctly maps
+    exotic-but-major labels this allowlist may not have seen.
+
+    A write-in row counts for its party only when it drew a real share of the
+    vote (``WRITEIN_MAJOR_PARTY_SHARE``). Both extremes are represented in the
+    data: Ron Packard *won* CA-43 in 1982 as a write-in with 37% of the vote
+    and Charles Dougherty was the effective Republican nominee in PA-03 in
+    1998 with 40%, so dropping every write-in would record those seats as
+    uncontested; while the shadow write-in campaigns in a few AZ/WI 2022 House
+    seats drew 0.02%-2% and would otherwise turn a seat no Democrat contested
+    into a D-96 training row.
+    """
+    if (row.get("writein") or "").upper() in ("TRUE", "1", "T"):
+        try:
+            share = float(row.get("candidatevotes") or 0) / float(
+                row.get("totalvotes") or 0)
+        except (ValueError, ZeroDivisionError):
+            return None
+        if share < WRITEIN_MAJOR_PARTY_SHARE:
+            return None
+    for field in ("party_detailed", "party", "party_simplified"):
+        label = (row.get(field) or "").strip().upper()
+        if not label:
+            continue
+        if label in DEM_PARTIES:
+            return "D"
+        if label in REP_PARTIES:
+            return "R"
+    return None
 
 _VINTAGE = Path(__file__).resolve().parents[2] / "data" / "vintage"
 BUNDLED_HOUSE_FILE = _VINTAGE / "medsl_us_house_1976_2024.tab"
@@ -131,7 +196,7 @@ def parse(payload: bytes, chamber: str) -> list[dict]:
             continue
         year = int(row["year"])
         special = row.get("special", "FALSE").upper() in ("TRUE", "1")
-        party = (row.get("party_simplified") or row.get("party") or "").upper()
+        party = major_party(row)
         try:
             cand_votes = float(row.get("candidatevotes") or 0)
         except ValueError:
@@ -142,12 +207,7 @@ def parse(payload: bytes, chamber: str) -> list[dict]:
         else:
             key = (year, senate_seat_key(state, special), state, None, special)
         bucket = votes[key]
-        if party in DEM_PARTIES:
-            bucket["D"] += cand_votes
-        elif party in REP_PARTIES:
-            bucket["R"] += cand_votes
-        else:
-            bucket["other"] += cand_votes
+        bucket[party or "other"] += cand_votes
     rows = []
     for (year, seat_key, state, district, _special), bucket in votes.items():
         margin = two_party_margin(bucket["D"], bucket["R"])

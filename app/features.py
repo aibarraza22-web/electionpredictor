@@ -187,7 +187,18 @@ class RedrawAdjust:
     This is a 2026-specific, sourced structural input that cannot be
     walk-forward validated (2026 has not happened). It is intentionally small
     and per-seat; the ideal replacement is real presidential-by-new-district
-    partisanship, which is not fetchable in this environment."""
+    partisanship, which is not fetchable in this environment.
+
+    SCOPE NOTE (model 2026.20): this override no longer reaches any published
+    2026 margin. Every one of the 181 redrawn seats now carries published
+    expert ratings, and the redrawn overlay stratum is fitted at weight 1.00
+    (research claim R-004), so the ratings replace the model's margin outright
+    on exactly the seats this class touches. It still runs, still shapes the
+    pre-overlay margin the race page attributes, and would take effect again
+    for any redrawn seat that lost ratings coverage -- but its known weakness
+    (it cracks the k most-MARGINAL seats, while the 2025-26 maps dismantled
+    specific safe urban districts such as TX-09 and TN-09) is no longer
+    reaching the published forecast."""
 
     CRACK_MARGIN = 8.0
 

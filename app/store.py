@@ -218,6 +218,47 @@ def all_campaign_events(cycle: int, as_of: str | None = None) -> list[dict]:
     return [dict(r._mapping) for r in rows]
 
 
+def all_race_ratings(cycle: int | None = None,
+                     as_of: str | None = None) -> list[dict]:
+    """Expert race ratings, optionally restricted to a vintage cutoff.
+
+    ``as_of`` filters on ``rating_date`` — the date the rater published that
+    rating — so a walk-forward backtest can never read a rating that did not
+    exist yet at the as-of date it is predicting from.
+    """
+    t = db.race_ratings
+    q = select(t)
+    if cycle is not None:
+        q = q.where(t.c.cycle == cycle)
+    if as_of:
+        q = q.where(t.c.rating_date <= as_of[:10])
+    with db.get_engine().connect() as c:
+        rows = c.execute(q.order_by(t.c.cycle, t.c.seat_key,
+                                    t.c.rating_date, t.c.id)).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+def ratings_for_seat(seat_key: str, cycle: int,
+                     as_of: str | None = None) -> list[dict]:
+    t = db.race_ratings
+    q = select(t).where(t.c.seat_key == seat_key, t.c.cycle == cycle)
+    if as_of:
+        q = q.where(t.c.rating_date <= as_of[:10])
+    with db.get_engine().connect() as c:
+        rows = c.execute(q.order_by(t.c.rating_date, t.c.rater, t.c.id)).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+def seat_context_for(cycle: int, seat_key: str | None = None) -> list[dict]:
+    t = db.seat_context
+    q = select(t).where(t.c.cycle == cycle)
+    if seat_key:
+        q = q.where(t.c.seat_key == seat_key)
+    with db.get_engine().connect() as c:
+        rows = c.execute(q.order_by(t.c.seat_key, t.c.observed_at, t.c.id)).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
 def start_ingestion_run(source: str, details: dict | None = None) -> int:
     with db.get_engine().begin() as c:
         result = c.execute(insert(db.ingestion_runs).values(
@@ -486,7 +527,7 @@ def counts() -> dict[str, int]:
     with db.get_engine().connect() as c:
         for name in ("election_results", "polls", "incumbents", "finance",
                      "finance_snapshots", "candidate_profiles", "campaign_events",
-                     "ingestion_runs", "races", "forecasts", "backtest_runs",
-                     "research_evidence"):
+                     "race_ratings", "seat_context", "ingestion_runs", "races",
+                     "forecasts", "backtest_runs", "research_evidence"):
             out[name] = c.execute(select(func.count()).select_from(db.metadata.tables[name])).scalar_one()
     return out

@@ -408,7 +408,9 @@ def forecast_analysis(base_mean: float, final_mean: float, sigma: float,
                       dem_probability: float,
                       components: dict, finance: dict, candidates: dict,
                       events: dict, campaign: dict,
-                      previous: dict | None = None) -> dict:
+                      previous: dict | None = None,
+                      expert_ratings: dict | None = None,
+                      expert_overlay: dict | None = None) -> dict:
     polling = sum(float(components.get(k) or 0.0)
                   for k in ("poll_average", "has_polls"))
     change = None
@@ -420,10 +422,15 @@ def forecast_analysis(base_mean: float, final_mean: float, sigma: float,
         }
         change["material"] = (abs(change["margin_points"]) >= 0.5 or
                               abs(change["dem_probability_points"]) >= 2.0)
+    overlay_shift = float((expert_overlay or {}).get("margin_shift") or 0.0)
     return {
         "structural_baseline_margin": round(base_mean - polling, 2),
         "polling_adjustment": round(polling, 2),
-        "pre_campaign_margin": round(base_mean, 2),
+        "model_margin": round(base_mean, 2),
+        "expert_rating_adjustment": round(overlay_shift, 2),
+        "expert_ratings": expert_ratings,
+        "expert_rating_overlay": expert_overlay,
+        "pre_campaign_margin": round(base_mean + overlay_shift, 2),
         "campaign_adjustment": campaign["margin_adjustment"],
         "campaign_adjustment_status": campaign["status"],
         "campaign_adjustment_detail": campaign,

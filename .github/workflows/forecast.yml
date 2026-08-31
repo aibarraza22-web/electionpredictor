@@ -52,7 +52,7 @@ jobs:
           fi
       - name: Ingest primary sources
         if: steps.cadence.outputs.run == 'true' && env.SKIP != '1'
-        run: python scripts/ingest.py --sources fte_polls,legislators,medsl,fec,votehub,polls_feed,candidate_profiles,campaign_events
+        run: python scripts/ingest.py --sources fte_polls,legislators,medsl,fec,votehub,race_ratings,polls_feed,candidate_profiles,campaign_events
       - name: Build frequent forecast and control simulation
         if: steps.cadence.outputs.run == 'true' && steps.cadence.outputs.full_backtest != 'true' && env.SKIP != '1'
         run: python scripts/forecast.py --skip-backtests

@@ -175,6 +175,48 @@ campaign_events = Table(
     UniqueConstraint("source", "external_id", name="uq_campaign_event_source"),
 )
 
+race_ratings = Table(
+    "race_ratings", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("cycle", Integer, nullable=False),
+    Column("chamber", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("district", Text),
+    Column("seat_key", Text, nullable=False),
+    Column("rater", Text, nullable=False),
+    Column("rating", Text, nullable=False),        # e.g. "Lean R", "Tossup"
+    Column("score", Float, nullable=False),        # -4 (Safe R) .. +4 (Safe D)
+    Column("rating_date", Text, nullable=False),   # when THAT rater published it
+    Column("available_at", Text, nullable=False),
+    Column("retrieved_at", Text, nullable=False),
+    Column("source", Text, nullable=False),
+    Column("source_url", Text),
+    Column("source_id", Integer),
+    UniqueConstraint("cycle", "seat_key", "rater", "rating_date", "source",
+                     name="uq_race_rating_observation"),
+)
+
+# Per-seat structural context published alongside the ratings tables (Cook
+# PVI, retirement status, last result). Recorded for provenance and display;
+# see RESEARCH_CLAIMS R-002 for why it is not yet a model input.
+seat_context = Table(
+    "seat_context", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("cycle", Integer, nullable=False),
+    Column("chamber", Text, nullable=False),
+    Column("seat_key", Text, nullable=False),
+    Column("cook_pvi", Float),
+    Column("incumbent", Text),
+    Column("incumbent_retiring", Boolean, default=False),
+    Column("last_result_margin", Float),
+    Column("observed_at", Text, nullable=False),
+    Column("source", Text, nullable=False),
+    Column("source_url", Text),
+    Column("source_id", Integer),
+    UniqueConstraint("cycle", "seat_key", "observed_at", "source",
+                     name="uq_seat_context_observation"),
+)
+
 ingestion_runs = Table(
     "ingestion_runs", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),

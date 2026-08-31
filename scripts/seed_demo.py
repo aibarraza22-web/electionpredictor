@@ -81,7 +81,9 @@ def seed() -> None:
          "status": "Production", "validation": "Chamber-specific residual pools",
          "decision": "Separate Senate fit", "source": "Project research synthesis"},
     ])
-    summary = build_forecasts(prefix="demo")
+    # The demo dataset is synthetic and labelled as such end-to-end; the
+    # release gates police the live forecast, not this smoke test.
+    summary = build_forecasts(prefix="demo", enforce_gates=False)
     print("Seeded clearly labelled synthetic demo dataset.")
     print(f"forecast: {summary['data_version']}, races={summary['races']}")
 

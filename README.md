@@ -34,6 +34,7 @@ synthetic demo — clearly labelled as such end-to-end — is available with
 | `fte_polls` | FiveThirtyEight raw-polls dataset (CC-BY-4.0) | 1998–2022 House/Senate polls + certified outcomes of polled races |
 | `legislators` | @unitedstates congress-legislators (CC0) | Current incumbency; 2026 Senate classes incl. specials |
 | `medsl` | MIT Election Data + Science Lab, Harvard Dataverse (CC0) | Full district-level House 1976–2022 / Senate 1976–2020 returns |
+| `race_ratings` | Wikipedia election-ratings tables (CC BY-SA 4.0) | Dated expert ratings from ~10 handicappers for all 435 House districts and 35 Senate seats, 2016–2026 |
 | `fec` | Federal Election Commission API | Live 2026 candidate finance totals (needs `FEC_API_KEY`) |
 | `polls_feed` | Any CSV in the 538 raw-polls schema | Live 2026 polling (`POLLS_FEED_URL`) |
 | `scripts/import_csv.py` | State certified results | Official results not yet in an aggregate release |
@@ -47,11 +48,20 @@ Every raw record carries source, URL, license, `retrieved_at`,
 * Features are vintage-safe: results enter only for later cycles, polls are cut off at the as-of date, and walk-forward backtests assert both properties at runtime.
 * All published performance numbers come from stored backtest runs (`/api/backtests`); nothing is hand-entered.
 * Missing inputs are flagged and widen uncertainty; they are never imputed with invented values, and coverage is reported by `/api/data-health`.
-* Race pages separate the structural baseline, polling contribution, and a
-  campaign layer. Model 2026.18 uses a bounded provisional campaign adjustment
-  from as-of finance capacity, comparable candidate-quality observations, and
-  explicitly eligible events. Every component is displayed; recent polls
-  discount already-absorbed information and active adjustments add uncertainty.
+* Race pages separate the structural baseline, the polling contribution, an
+  **expert-ratings overlay**, and a campaign layer — each attributed
+  separately and each carrying its own uncertainty. Model 2026.19 blends the
+  fitted model with a published expert consensus on the seats the overlay was
+  fitted for; the blend weight and the rating→margin slope are chosen by the
+  same walk-forward protocol that picks the chamber champions (claim R-001),
+  and adding the consensus as a plain model feature was tested and rejected
+  (claim R-002).
+* **Release gates** (`app/gates.py`) run before any snapshot is frozen: every
+  competitive race must carry data grade A or B, a new model version must move
+  at least 75% of comparable competitive races, and the ratings feed must have
+  delivered current-cycle coverage. A failure refuses the publish and leaves
+  the previous forecast standing, instead of shipping a version that changes
+  nothing (claim R-003).
 * The scheduled workflow wakes hourly and gates itself to daily, 6-hour,
   3-hour, or 2-hour updates as Election Day approaches. Unchanged inputs do
   not create duplicate snapshots.

@@ -6,7 +6,8 @@ rows with idempotent inserts, so re-running an ingest never duplicates data.
 """
 import os
 
-from . import campaign, fte_polls, legislators, medsl, fec, csv_results, votehub  # noqa: F401
+from . import (campaign, fte_polls, legislators, medsl, fec, csv_results,  # noqa: F401
+               race_ratings, votehub)
 
 
 def polls_feed() -> dict:
@@ -27,4 +28,5 @@ ADAPTERS = {
     "polls_feed": polls_feed,
     "candidate_profiles": campaign.ingest_profiles,
     "campaign_events": campaign.ingest_events,
+    "race_ratings": race_ratings.ingest,
 }

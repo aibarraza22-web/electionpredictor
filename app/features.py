@@ -19,6 +19,13 @@ PRESIDENT_PARTY = {
     2022: "D", 2024: "D", 2026: "R",
 }
 
+# Expert race ratings are deliberately NOT in this vector. Added as a
+# (rating_consensus, has_rating) pair they made the model worse on exactly the
+# seats they cover — House rated-seat Brier 0.185 -> 0.202, winner accuracy
+# 0.761 -> 0.712 walk-forward — because `has_rating` is a selection indicator
+# (a seat is rated because it is competitive) and a single global coefficient
+# turns that selection into a biased constant shift. Ratings enter through
+# app.ratings.RatingOverlay instead, which does help; see research claim R-001.
 FEATURE_NAMES = [
     "intercept", "prior_margin", "has_prior", "prior_winner",
     "state_lean", "has_state_lean",
@@ -254,7 +261,8 @@ def build_row(seat_key: str, cycle: int, chamber: str, state: str,
               as_of: str, actual_margin: float | None = None,
               holder_party: str | None = None,
               state_lean: "StateLean | None" = None,
-              redraw_adjust: "RedrawAdjust | None" = None) -> FeatureRow:
+              redraw_adjust: "RedrawAdjust | None" = None,
+              rating_lookup: "object | None" = None) -> FeatureRow:
     prior_margin, prior_cycle = results.prior(cycle, seat_key, chamber)
     poll_avg, poll_count, last_poll = poll_lookup.average(cycle, seat_key, as_of)
     gb_avg, gb_count, _ = poll_lookup.average(cycle, GENERIC_BALLOT_SEAT, as_of)
@@ -284,6 +292,11 @@ def build_row(seat_key: str, cycle: int, chamber: str, state: str,
         override = redraw_adjust.prior_override(seat_key)
         if override is not None:
             prior_margin = override
+    # Expert race ratings published on or before the as-of date. Vintage
+    # safety is enforced twice: the store filters on rating_date and
+    # RatingLookup.consensus filters again against this row's as_of.
+    rating_summary = (rating_lookup.consensus(cycle, seat_key, as_of)
+                      if rating_lookup is not None else None)
     has_prior = prior_margin is not None
     has_polls = poll_avg is not None
     has_gb = gb_avg is not None
@@ -313,13 +326,15 @@ def build_row(seat_key: str, cycle: int, chamber: str, state: str,
         district=district, x=x, actual_margin=actual_margin,
         poll_count=poll_count, last_poll_date=last_poll, has_prior=has_prior,
         detail={"prior_cycle": prior_cycle, "as_of": as_of,
-                "state_lean_cycle": lean_cycle, "redrawn": redrawn})
+                "state_lean_cycle": lean_cycle, "redrawn": redrawn,
+                "ratings": rating_summary})
 
 
 def historical_rows(results: ResultLookup, poll_lookup: PollLookup, chamber: str,
                     cycles: list[int] | None = None,
                     election_dates: dict[int, str] | None = None,
-                    state_lean: "StateLean | None" = None) -> list[FeatureRow]:
+                    state_lean: "StateLean | None" = None,
+                    rating_lookup: "object | None" = None) -> list[FeatureRow]:
     """One row per seat with a known outcome; as-of is that cycle's election day."""
     if state_lean is None:
         state_lean = StateLean(results)
@@ -332,5 +347,6 @@ def historical_rows(results: ResultLookup, poll_lookup: PollLookup, chamber: str
             rows.append(build_row(
                 result["seat_key"], cycle, chamber, result["state"],
                 result.get("district"), results, poll_lookup, as_of,
-                actual_margin=result["dem_margin"], state_lean=state_lean))
+                actual_margin=result["dem_margin"], state_lean=state_lean,
+                rating_lookup=rating_lookup))
     return rows

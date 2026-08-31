@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from random import Random
 
 import pytest
@@ -36,7 +37,7 @@ def _seed_synthetic(cycles=(2016, 2018, 2020, 2022, 2024), n_house=60):
     store.insert_rows("incumbents", incumbents)
     store.set_meta("senate_dem_seats_not_up", "34")
     store.record_source("synthetic-demo", None, "n/a", store.now(), None, len(results))
-    return build_forecasts(prefix="demo")
+    return build_forecasts(prefix="demo", enforce_gates=False)
 
 
 @pytest.fixture()
@@ -96,7 +97,13 @@ def test_finance_overlay_changes_published_margin_and_probability(client):
          "receipts": 100_000, "disbursements": 80_000, "cash_on_hand": 20_000,
          "payload_hash": "R1-weak"},
     ])
-    build_forecasts(as_of="2026-08-31T00:00:00+00:00", prefix="demo-finance",
+    # Strictly after the fixture's snapshot: /api/races reads the most recent
+    # as_of, so a hardcoded timestamp silently selected the PREVIOUS forecast
+    # once the wall clock passed it, and the assertions below then measured a
+    # build that never saw this finance data.
+    later = (datetime.fromisoformat(before["as_of"])
+             + timedelta(seconds=1)).isoformat()
+    build_forecasts(as_of=later, prefix="demo-finance", enforce_gates=False,
                     with_backtests=False, force=True)
     after = client.get("/api/races/2026-house-CA-01").json()["forecast"]
     analysis = client.get("/api/races/2026-house-CA-01/campaign").json()["analysis"]

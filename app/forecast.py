@@ -12,7 +12,7 @@ from collections import defaultdict
 from datetime import date
 from math import sqrt
 
-from . import store
+from . import gates, store
 from .backtest import run_backtests
 from .campaign import (campaign_adjustment, candidate_context, event_context,
                        finance_context, forecast_analysis)
@@ -20,6 +20,8 @@ from .domain import rating
 from .features import PollLookup, ResultLookup, build_row
 from .ingest.base import house_seat_key, senate_seat_key
 from .model import MarginModel, Prediction
+from .ratings import (RatingLookup, RatingOverlay, consensus_of,
+                      is_unanimously_safe, rating_evidence_points)
 from .simulation import simulate_control
 
 CYCLE = 2026
@@ -32,7 +34,11 @@ CYCLE = 2026
 # snapshots are immutable per (race_id, as_of, model_version): a same-day
 # rerun under an unchanged version keeps the day's first frozen numbers, so a
 # real prediction-affecting change must bump the version to surface.
-MODEL_VERSION = "2026.18"
+MODEL_VERSION = "2026.19"
+# Release-gate floor: the 2026 map has 153 House seats and all 35 Senate seats
+# on the published ratings pages. Anything far below that means the ratings
+# ingest failed and the forecast would silently fall back to history alone.
+MIN_RATED_RACES = 150
 ELECTION_DATE = "2026-11-03"
 
 # Seats per state, 2020 census apportionment (sums to 435).
@@ -653,7 +659,121 @@ RESEARCH_CLAIMS.extend([
      "source": "Campaign Overperformance Analysis; project research mandate"},
 ])
 
+RESEARCH_CLAIMS.extend([
+    {"id": "R-001",
+     "claim": "ACCEPTED: published expert race ratings, blended in as a fitted "
+              "overlay rather than as a model feature, improve held-out accuracy "
+              "on the seats they cover. House (490 held-out rated seats): Brier "
+              "0.1642 -> 0.1325, log loss 0.5251 -> 0.4345, winner accuracy 0.7755 "
+              "-> 0.8449, margin MAE 9.69 -> 6.00. Senate (66): Brier 0.0871 -> "
+              "0.0763, log loss 0.3594 -> 0.3388, winner accuracy 0.8788 -> 0.8939, "
+              "but margin MAE 11.34 -> 11.99 -- the Senate buys better win "
+              "probabilities at the cost of slightly worse point margins on a "
+              "sample of 66. These figures are recomputed by the overlay's own fit "
+              "on every run and served at /api/data-health, never hand-entered.",
+     "chamber": "both",
+     "metric": "walk-forward Brier / log loss / winner accuracy / margin MAE on "
+               "seats with published ratings",
+     "mechanism": "Handicappers observe candidate recruitment, retirements, "
+                  "district-level private polling, ad reservations and primary "
+                  "outcomes months before any of it reaches a public poll. For the "
+                  "~90% of 2026 races with no polling at all, that is the only "
+                  "current-cycle seat-level information that exists.",
+     "status": "Champion component",
+     "validation": "Expanding-window walk-forward over 2016-2024, the same protocol "
+                   "that selects the chamber champions. The rating->margin slope is "
+                   "fitted in within-cycle deviation form on strictly earlier cycles "
+                   "(3.8-4.6 pts per rating step for the House, 5.9-7.0 for the "
+                   "Senate; stable in every held-out cycle) and the national level "
+                   "comes from the model, never from outcomes. Blend weights are "
+                   "chosen by held-out log loss per chamber and separately for "
+                   "polled and unpolled seats: a polled race keeps more of the "
+                   "model, which is what the data asks for (House MAE bottoms near "
+                   "w=0.6 on polled seats but keeps falling to w=1 on unpolled "
+                   "ones). The weight is capped at 0.75 -- historical pages carry "
+                   "FINAL pre-election ratings while the live feed is ~2 months "
+                   "out, and archived late-August revisions of the 2020/2022/2024 "
+                   "pages show the slope holds (4.18/4.21/3.84 vs 3.70/4.06/3.86) "
+                   "but residual spread roughly doubles.",
+     "decision": "Apply the overlay to the population its slope was fitted on: "
+                 "every Senate seat (those pages list the full map) and every House "
+                 "seat at least one rater declines to call safe. Unrated seats, and "
+                 "House seats every rater calls safe, keep the model's own "
+                 "prediction. Rated-seat sigma is re-estimated from the blended "
+                 "walk-forward residuals, because the model's pooled sigma (fitted "
+                 "over uncontested blowouts too) over-covered competitive races "
+                 "badly -- walk-forward coverage80 ~0.93 against a nominal 0.80.",
+     "source": "User: the toplines have not changed; get every competitive race to "
+               "data grade A/B on real data and make it move the predictions"},
+    {"id": "R-002",
+     "claim": "REJECTED: expert consensus added to the ridge as a "
+              "(rating_consensus, has_rating) feature pair.",
+     "chamber": "both",
+     "metric": "walk-forward Brier / winner accuracy on rated seats",
+     "mechanism": "``has_rating`` is a SELECTION indicator -- a seat appears on the "
+                  "ratings page because someone already judged it competitive -- so "
+                  "a single global coefficient turns that selection into a biased "
+                  "constant shift whose sign depends on the D/R mix of whichever "
+                  "cycles happen to be in training.",
+     "status": "Rejected",
+     "validation": "Identical walk-forward protocol. House rated seats got WORSE: "
+                   "Brier 0.185 -> 0.202, winner accuracy 0.761 -> 0.712, margin MAE "
+                   "13.82 -> 14.40. The Senate degraded too (Brier 0.088 -> 0.093). "
+                   "Rescaling the feature changed nothing, confirming the problem is "
+                   "structural rather than a ridge-penalty artifact.",
+     "decision": "Keep the ratings out of FEATURE_NAMES. The same data helps a great "
+                 "deal through the R-001 overlay, which never asks the ratings for "
+                 "the national level -- only for the spread between seats.",
+     "source": "First implementation attempt of R-001, kept because the negative "
+               "result is what justifies the overlay's shape"},
+    {"id": "R-003",
+     "claim": "A model version that does not change the published competitive-race "
+              "numbers must not be publishable.",
+     "chamber": "both", "metric": "release gates on the payloads about to be frozen",
+     "mechanism": "Model 2026.18 wired a campaign layer into the margin equation "
+                  "whose candidate-profile and campaign-event feeds were never "
+                  "configured in production (CANDIDATE_PROFILES_URL and "
+                  "CAMPAIGN_EVENTS_URL both empty; the run reported "
+                  "with_campaign_events: 0), so it shipped as a finance-only "
+                  "adjustment and moved the toplines by almost nothing: House "
+                  "Democratic control 0.6432 -> 0.6441 and Senate 0.5474 -> 0.5616 "
+                  "between the last 2026.17 run and the first 2026.18 run. Nothing "
+                  "caught it because nothing was checking.",
+     "status": "Enforced",
+     "validation": "app.gates runs before any snapshot is inserted: every "
+                   "competitive race must carry data grade A or B; a new model "
+                   "version must move at least 75% of comparable competitive races; "
+                   "and the ratings feed must have delivered current-cycle coverage. "
+                   "A failure refuses the publish and leaves the previous forecast "
+                   "standing.",
+     "decision": "Gate the pipeline, and report the gate results in the run summary "
+                 "and at /api/data-health.",
+     "source": "User: the topline numbers still haven't changed at all"},
+])
+
 RESEARCH_EVIDENCE = [
+    {"id": "E-R001-RATINGS", "claim_id": "R-001",
+     "citation": "Wikipedia, United States House/Senate election ratings (2016-2026), "
+                 "aggregating Cook Political Report, Inside Elections, Sabato's "
+                 "Crystal Ball, DDHQ, The Economist, Split Ticket, Silver Bulletin, "
+                 "RealClearPolitics, Fox News and others",
+     "source_url": "https://en.wikipedia.org/wiki/2026_United_States_House_of_Representatives_election_ratings",
+     "data_period": "2016, 2018, 2020, 2022, 2024 (fitting) and 2026 (live)",
+     "interpretation": "A published, dated, multi-rater consensus is real "
+                       "pre-election information about seats that carry no polling.",
+     "expected_mechanism": "Handicappers price candidate quality, retirements, "
+                           "recruitment, private polling and ad spending well before "
+                           "public polls exist.",
+     "proposed_feature": "Per-seat consensus on the shared Safe/Likely/Lean/Tilt/"
+                         "Tossup ladder, applied through a fitted overlay.",
+     "leakage_risk": "Reading a rating published after the forecast's as-of date. "
+                     "Blocked twice: the store filters on rating_date and "
+                     "RatingLookup filters again against the row's as_of.",
+     "validation_test": "Expanding-window walk-forward 2016-2024, scored on rated "
+                        "seats, against the identical model without the overlay.",
+     "result": "Accepted: House rated-seat log loss 0.525 -> 0.437, winner accuracy "
+               "0.775 -> 0.841, margin MAE 9.69 -> 6.17.",
+     "decision": "Champion component (R-001)."},
     {"id": "E-C002-CASE", "claim_id": "C-002",
      "citation": "Conceptualizing and Measuring Early Campaign Fundraising in Congressional Elections",
      "source_url": "https://www.cambridge.org/core/journals/political-science-research-and-methods/article/conceptualizing-and-measuring-early-campaign-fundraising-in-congressional-elections/48B7870A4EC0EC7B3AE060FBC42873C0",
@@ -833,7 +953,9 @@ def _store_alternative_model_snapshots(training, feature_rows, as_of, version):
 
 
 def build_forecasts(as_of: str | None = None, prefix: str = "live",
-                    with_backtests: bool = True, force: bool = False) -> dict:
+                    with_backtests: bool = True, force: bool = False,
+                    enforce_gates: bool = True,
+                    min_rated_races: int = MIN_RATED_RACES) -> dict:
     """Train on ingested history, freeze snapshots, store control simulations."""
     as_of = as_of or store.now()
     fingerprint = store.data_fingerprint()
@@ -847,6 +969,11 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     races = build_race_universe()
     results = ResultLookup(store.all_results())
     poll_lookup = PollLookup(store.all_polls())
+    # Published expert ratings, filtered to those in existence at as_of. This
+    # is the current-cycle seat-level signal the forecast previously lacked
+    # for 427 of 470 races; app.features turns it into a model feature and the
+    # coefficient is fitted on historical cycles (research claim R-001).
+    rating_lookup = RatingLookup(store.all_race_ratings(as_of=as_of))
     from .features import StateLean, RedrawAdjust
     state_lean = StateLean(results)
     redraw_adjust = RedrawAdjust(results)
@@ -854,9 +981,10 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     training: list = []
     for chamber in ("house", "senate"):
         from .features import historical_rows
-        training.extend(historical_rows(results, poll_lookup, chamber,
-                                        cycles=[c for c in results.cycles(chamber) if c < CYCLE],
-                                        state_lean=state_lean))
+        training.extend(historical_rows(
+            results, poll_lookup, chamber,
+            cycles=[c for c in results.cycles(chamber) if c < CYCLE],
+            state_lean=state_lean, rating_lookup=rating_lookup))
     trained_chambers = {row.chamber for row in training}
     if not {"house", "senate"} <= trained_chambers:
         raise RuntimeError(
@@ -866,11 +994,19 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     # mandate calls for different structures per chamber; this decides it on
     # evidence). Fit one model per chamber on that chamber's training rows.
     from .backtest import select_chamber_champions
-    champions = select_chamber_champions(results, poll_lookup, state_lean)
+    champions = select_chamber_champions(results, poll_lookup, state_lean,
+                                         rating_lookup=rating_lookup)
     models: dict[str, MarginModel] = {}
     for chamber, choice in champions.items():
         chamber_rows = [r for r in training if r.chamber == chamber]
         models[chamber] = MarginModel(**choice["kwargs"]).fit(chamber_rows)
+
+    # Expert-consensus overlay, fitted per chamber under the same walk-forward
+    # protocol that picks the champion (research claim R-001). This is what
+    # lets published margins move on current-cycle evidence in the ~90% of
+    # races that carry no polling.
+    overlays = {chamber: RatingOverlay(chamber).fit(
+        [r for r in training if r.chamber == chamber]) for chamber in ("house", "senate")}
 
     # Seats with ingested campaign-finance rows for this cycle: a real input to
     # the published data grade instead of a hardcoded False.
@@ -892,18 +1028,49 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     feature_rows = {}
     previous_by_race = {item["race_id"]: item for item in
                         store.latest_forecasts(model_version=MODEL_VERSION)}
+    # The outgoing champion's published numbers, resolved from the data before
+    # this run's snapshots are written. The release gate compares against these
+    # so a version bump that changes nothing in production cannot be published.
+    outgoing_version = store.latest_champion_version()
+    outgoing_by_race = ({item["race_id"]: item for item in store.latest_forecasts()}
+                        if outgoing_version and outgoing_version != MODEL_VERSION
+                        else {})
+
+    # Pass 1: the model's own prediction for every race. The overlay's level
+    # term is the model's mean across this cycle's rated seats, so every base
+    # prediction has to exist before any of them can be adjusted.
+    base_predictions: dict[str, Prediction] = {}
     for race in races:
         row = build_row(race["seat_key"], CYCLE, race["chamber"], race["state"],
                         race["district"], results, poll_lookup, as_of,
                         holder_party=race["incumbent_party"], state_lean=state_lean,
-                        redraw_adjust=redraw_adjust)
+                        redraw_adjust=redraw_adjust, rating_lookup=rating_lookup)
         feature_rows[race["id"]] = row
+        base_predictions[race["id"]] = models[race["chamber"]].predict(row)
+    overlay_context = {}
+    for chamber, overlay in overlays.items():
+        rated = [(base_predictions[race["id"]].mean,
+                  consensus_of(feature_rows[race["id"]]))
+                 for race in races if race["chamber"] == chamber
+                 and consensus_of(feature_rows[race["id"]]) is not None]
+        overlay_context[chamber] = overlay.cycle_context(
+            [mean for mean, _ in rated], [c for _, c in rated])
+
+    # Pass 2: expert overlay, then the campaign layer, then freeze.
+    for race in races:
+        row = feature_rows[race["id"]]
         poll_age_days = _poll_age_days(row.last_poll_date, as_of)
+        rating_summary = row.detail.get("ratings")
         payload = models[race["chamber"]].forecast_payload(
             row, race["id"], finance_fresh=race["seat_key"] in financed_seats,
-            poll_age_days=poll_age_days)
-        prediction = models[race["chamber"]].predict(row)
+            poll_age_days=poll_age_days,
+            rating_points=rating_evidence_points(rating_summary))
+        model_prediction = base_predictions[race["id"]]
         components = json.loads(payload["components"])
+        overlay = overlays[race["chamber"]]
+        prediction, overlay_detail = overlay.apply(
+            model_prediction, consensus_of(row), overlay_context[race["chamber"]],
+            polled=row.poll_count > 0)
         finance = finance_context(by_finance.get(race["seat_key"], []), as_of,
                                   ELECTION_DATE, chamber=race["chamber"])
         party_by_candidate = {
@@ -920,6 +1087,9 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
         events = event_context(by_event.get(race["seat_key"], []),
                                party_by_candidate=party_by_candidate, as_of=as_of,
                                last_poll_date=row.last_poll_date)
+        # The campaign layer sits on top of the overlay: its competitiveness
+        # damping should read the margin the forecast actually publishes, not
+        # a pre-overlay one it no longer believes.
         campaign = campaign_adjustment(
             prediction.mean, finance, candidates, events,
             poll_count=row.poll_count, poll_age_days=poll_age_days)
@@ -938,16 +1108,42 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
             "low95": round(low95, 2), "high95": round(high95, 2),
             "rating": rating(final_prediction.dem_probability),
         })
+        components["expert_rating_adjustment"] = overlay_detail.get("margin_shift", 0.0)
         components["campaign_adjustment"] = campaign["margin_adjustment"]
         previous = previous_by_race.get(race["id"])
         components["_analysis"] = forecast_analysis(
-            prediction.mean, final_mean, final_sigma, final_prediction.dem_probability,
-            components, finance, candidates, events, campaign, previous)
+            model_prediction.mean, final_mean, final_sigma,
+            final_prediction.dem_probability, components, finance, candidates,
+            events, campaign, previous, expert_ratings=rating_summary,
+            expert_overlay=overlay_detail)
         payload["components"] = json.dumps(components)
         payload.update({"as_of": as_of, "model_version": MODEL_VERSION,
                         "data_version": version})
         snapshots.append(payload)
-        feature_meta[race["id"]] = {"has_prior": row.has_prior, "poll_count": row.poll_count}
+        feature_meta[race["id"]] = {"has_prior": row.has_prior,
+                                    "poll_count": row.poll_count,
+                                    "rated": bool(rating_summary),
+                                    "chamber": race["chamber"],
+                                    "consensus_safe": is_unanimously_safe(rating_summary),
+                                    "quality": payload["quality"],
+                                    "rating": payload["rating"],
+                                    "dem_probability": payload["dem_probability"]}
+
+    # Release gates run BEFORE anything is frozen: a failure leaves the
+    # previous forecast standing instead of publishing one that cannot back
+    # its own claims. See app.gates.
+    race_seats = {race["seat_key"] for race in races}
+    gate_coverage = {"with_expert_ratings":
+                     sum(1 for m in feature_meta.values() if m["rated"])}
+    gate_results = []
+    if enforce_gates:
+        gate_results = [
+            gates.check_current_cycle_ratings(gate_coverage,
+                                              minimum=min_rated_races),
+            gates.check_competitive_data_grade(snapshots),
+            gates.check_model_moved(snapshots, outgoing_by_race,
+                                    MODEL_VERSION, outgoing_version),
+        ]
     inserted = store.insert_forecasts(snapshots)
     _store_alternative_model_snapshots(training, feature_rows, as_of, version)
 
@@ -961,8 +1157,10 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
         "created_at": store.now(),
         "description": "Per-chamber ridge regression on vintage-safe "
                        f"fundamentals (state lean, seat history, environment) + "
-                       f"time-decayed polling, plus a bounded stage-aware campaign "
-                       f"capacity/candidate/event overlay. Chamber champions -> {champion_desc}",
+                       f"time-decayed polling, then a walk-forward-fitted expert "
+                       f"race-ratings overlay, then a bounded stage-aware campaign "
+                       f"capacity/candidate/event overlay. "
+                       f"Chamber champions -> {champion_desc}",
         "coefficients": json.dumps({ch: json.loads(m.to_json()) for ch, m in models.items()})})
     store.seed_research_claims(RESEARCH_CLAIMS)
     store.seed_research_evidence(RESEARCH_EVIDENCE)
@@ -988,17 +1186,46 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     store.set_meta("last_data_version", version)
     store.set_meta("last_input_fingerprint", fingerprint)
     store.set_meta("last_model_version", MODEL_VERSION)
+    # Coverage counts RACES IN THIS FORECAST, intersected with the seats each
+    # source actually covers. Counting the source's own key set instead
+    # reported 500 financed and 489 profiled seats against a 470-race
+    # universe -- FEC and the profile feed both carry seats that are not up in
+    # 2026 -- which made coverage unreadable as a percentage.
     coverage = {
         "races": len(races),
         "with_prior_result": sum(1 for m in feature_meta.values() if m["has_prior"]),
         "with_polls": sum(1 for m in feature_meta.values() if m["poll_count"] > 0),
-        "with_finance_vintages": len(financed_seats),
-        "with_candidate_profiles": len(by_profile),
-        "with_campaign_events": len(by_event),
+        "with_expert_ratings": gate_coverage["with_expert_ratings"],
+        "with_finance_vintages": len(financed_seats & race_seats),
+        "with_candidate_profiles": len(set(by_profile) & race_seats),
+        "with_campaign_events": len(set(by_event) & race_seats),
     }
+    # Races the model calls competitive that every rater calls safe. Not
+    # silently split down the middle (the overlay's slope is not fitted for
+    # that range, see app.ratings.overlay_consensus) and not silently hidden
+    # either: published as a named disagreement so it can be argued with.
+    consensus_safe_conflicts = sorted(
+        race_id for race_id, meta in feature_meta.items()
+        if meta.get("consensus_safe") and meta.get("chamber") == "house"
+        and meta["rating"] in gates.COMPETITIVE_RATINGS)
+    coverage["competitive_but_consensus_safe"] = len(consensus_safe_conflicts)
+    coverage["competitive_races"] = len(gates.competitive_races(snapshots))
+    coverage["competitive_races_grade_a_or_b"] = sum(
+        1 for p in gates.competitive_races(snapshots)
+        if p.get("quality") in gates.REQUIRED_GRADES)
     store.set_meta("coverage", json.dumps(coverage))
+    store.set_meta("expert_rating_overlay", json.dumps(
+        {chamber: overlay.to_json() for chamber, overlay in overlays.items()}))
+    store.set_meta("competitive_but_consensus_safe",
+                   json.dumps(consensus_safe_conflicts))
+    store.set_meta("release_gates", json.dumps(
+        {"run_at": store.now(), "model_version": MODEL_VERSION,
+         "enforced": enforce_gates, "results": gate_results}))
     return {"as_of": as_of, "data_version": version, "races": len(races),
             "snapshots_inserted": inserted, "coverage": coverage,
+            "expert_rating_overlay": {c: o.to_json() for c, o in overlays.items()},
+            "competitive_but_consensus_safe": consensus_safe_conflicts,
+            "release_gates": gate_results,
             "control": {k: {"democratic_control_probability": v["democratic_control_probability"]}
                         for k, v in control.items()},
             "backtests": [r["id"] for r in backtests]}

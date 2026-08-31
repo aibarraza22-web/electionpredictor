@@ -304,7 +304,8 @@ class MarginModel:
 
     def forecast_payload(self, row: FeatureRow, race_id: str,
                          finance_fresh: bool = False,
-                         poll_age_days: int | None = None) -> dict:
+                         poll_age_days: int | None = None,
+                         rating_points: int = 0) -> dict:
         prediction = self.predict(row)
         idx = self._indices()[prediction.model]
         names = [FEATURE_NAMES[i] for i in idx]
@@ -326,7 +327,7 @@ class MarginModel:
             "quality": quality_grade(
                 poll_count=row.poll_count, poll_age_days=poll_age_days,
                 candidate_known=True, finance_fresh=finance_fresh,
-                boundary_certain=row.has_prior),
+                boundary_certain=row.has_prior, rating_points=rating_points),
             "components": json.dumps(components),
         }
 

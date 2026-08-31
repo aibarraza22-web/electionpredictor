@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from . import db, store
 from .dashboard import DASHBOARD_HTML
 from .forecast import MODEL_VERSION
+from .ratings import RatingLookup
 
 
 def _champion_version() -> str:
@@ -72,6 +73,7 @@ def health_payload() -> dict:
     sources = store.sources_summary()
     freshness_hours = {
         "polls-feed": 8, "votehub-polls": 8, "fec-candidate-totals": 24,
+        "wikipedia-race-ratings": 48,
         "unitedstates-congress-legislators": 168, "medsl-constituency-returns": 8760,
     }
     now = datetime.now(timezone.utc)
@@ -89,6 +91,14 @@ def health_payload() -> dict:
         if mode == "live" and source["freshness"] == "stale":
             warnings.append(f"Source {source['source']} is stale ({source['age_hours']} hours old).")
     coverage = store.get_meta("coverage")
+    gate_meta = store.get_meta("release_gates")
+    gates_payload = json.loads(gate_meta) if gate_meta else None
+    if gates_payload and not all(g.get("passed", True)
+                                 for g in gates_payload.get("results") or []):
+        warnings.append("Last pipeline run failed a release gate; the published "
+                        "forecast is the previous version.")
+    overlay_meta = store.get_meta("expert_rating_overlay")
+    conflicts = store.get_meta("competitive_but_consensus_safe")
     return {
         "mode": mode,
         "database_backend": db.backend(),
@@ -97,6 +107,9 @@ def health_payload() -> dict:
         "sources": sources,
         "ingestion_runs": ingestion,
         "coverage": json.loads(coverage) if coverage else None,
+        "release_gates": gates_payload,
+        "expert_rating_overlay": json.loads(overlay_meta) if overlay_meta else None,
+        "competitive_but_consensus_safe": json.loads(conflicts) if conflicts else [],
         "last_forecast_as_of": store.get_meta("last_forecast_as_of"),
         "data_version": store.get_meta("last_data_version"),
         "warnings": warnings,
@@ -203,6 +216,21 @@ def race_finance(race_id: str):
                                       "(configure FEC_API_KEY and run ingestion)."}
 
 
+@app.get("/api/races/{race_id}/ratings")
+def race_ratings(race_id: str):
+    """Every published expert rating for this seat, with its own date."""
+    race = store.get_race(race_id)
+    if not race:
+        raise HTTPException(404)
+    rows = store.ratings_for_seat(race["seat_key"], race["cycle"])
+    lookup = RatingLookup(rows)
+    return {"race_id": race_id, "seat_key": race["seat_key"],
+            "consensus": lookup.consensus(race["cycle"], race["seat_key"]),
+            "observations": rows,
+            "note": None if rows else "No published expert ratings ingested for "
+                                      "this seat yet (run the race_ratings adapter)."}
+
+
 @app.get("/api/races/{race_id}/campaign")
 def race_campaign(race_id: str):
     race = store.get_race(race_id)
@@ -213,7 +241,9 @@ def race_campaign(race_id: str):
     analysis = components.get("_analysis") or {}
     return {"race_id": race_id, "as_of": snapshot["as_of"],
             "analysis": analysis,
-            "note": "Model 2026.18 applies a bounded provisional campaign adjustment with explicit attribution and added uncertainty."}
+            "note": "Margins are published as model -> expert-ratings overlay -> "
+                    "bounded campaign adjustment, each layer attributed separately "
+                    "and each adding its own uncertainty."}
 
 
 @app.get("/api/models")

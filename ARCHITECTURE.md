@@ -7,13 +7,16 @@ scripts/ingest.py                          app/main.py   FastAPI + dashboard
   app/ingest/*  ── raw_sources,              reads snapshots, races, polls,
                    election_results,         backtests, provenance
                    polls, incumbents,      app/index.py  Vercel entrypoint
-                   finance
+                   finance, race_ratings
 scripts/forecast.py
   app/features.py  vintage-safe rows   ──►  PostgreSQL (DATEBASE_URL)
+  app/model.py     ridge fits
+  app/ratings.py   expert consensus +        SQLite fallback for local dev
+                   fitted overlay
   app/campaign.py  finance vintages,
                    candidates, events
-  app/model.py     ridge fits               SQLite fallback for local dev
   app/backtest.py  walk-forward runs
+  app/gates.py     refuse-to-publish checks
   app/forecast.py  race universe,
                    snapshots, control sims
 ```
@@ -30,8 +33,15 @@ scripts/forecast.py
   Senate class 2 + ingested specials), immutable snapshots, stored control
   simulations.
 * `app/simulation.py` — seeded correlated margin-space simulation.
+* `app/ratings.py` — expert-rating consensus per seat and the walk-forward-
+  fitted `RatingOverlay` that blends it into the published margin. This is
+  the only place a rating becomes a number the forecast acts on.
+* `app/gates.py` — release gates evaluated against the payloads about to be
+  frozen; a failure refuses the publish and leaves the previous forecast
+  standing.
 * `app/campaign.py` — stage/opponent-relative finance context, auditable
   candidate/event context, structural/poll decomposition, and calibrated
-  narrow/4-point/8-point victory bands. It cannot alter the champion margin.
+  narrow/4-point/8-point victory bands, applied on top of the ratings
+  overlay within hard caps.
 * The API is typed by FastAPI/OpenAPI; heavy computation happens in the
   pipeline, requests only read (scenarios run a small labelled simulation).

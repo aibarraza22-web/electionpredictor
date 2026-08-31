@@ -12,6 +12,18 @@ calibration error, calibration slope/intercept, and competitive-race margin
 MAE. Extended metrics are stored inside each run's versioned config so the
 existing production schema remains backward compatible.
 
+The **expert-ratings overlay** is fitted and scored by the same protocol
+(`app/ratings.py::RatingOverlay.fit`): for each held-out cycle the
+rating→margin slope comes from strictly earlier cycles, the level comes from
+a model fitted on strictly earlier cycles, and the blend weight is chosen by
+held-out log loss per chamber and per polled/unpolled stratum. The full
+weight scoreboard and a model-only-vs-with-overlay comparison on the rated
+seats are recomputed every run and served at `/api/data-health`
+(`expert_rating_overlay.held_out_metrics`). Vintage safety has two
+independent guards: `store.all_race_ratings` filters on `rating_date` and
+`RatingLookup.consensus` filters again against the row's own as-of date, so
+a rating published after the date being predicted from cannot be read.
+
 Every pipeline run also evaluates **baseline models under the identical
 protocol** — prior-result-only, incumbency-only, environment-only, uniform
 swing, and polls-only — and stores a champion-vs-baseline table at

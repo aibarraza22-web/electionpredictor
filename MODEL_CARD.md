@@ -1,7 +1,10 @@
 # Model card
 
-**Model version:** 2026.17 — chamber-specific ridge regressions
-(fundamentals + polling tiers) trained on ingested primary-source history.
+**Model version:** 2026.19 — chamber-specific ridge regressions
+(fundamentals + polling tiers) trained on ingested primary-source history,
+blended with a walk-forward-fitted overlay on published expert race ratings,
+then a bounded campaign-development adjustment. Each layer is attributed
+separately in every frozen snapshot.
 
 **Use:** research, transparent forecast workflow development, and public
 forecast presentation with the provenance caveats below surfaced by
@@ -15,10 +18,28 @@ counts are stored with each fit in `model_versions.coefficients`.
 and after controlled methodology changes. Frequent data-only refreshes reuse
 the last validated model. Metrics live in `/api/backtests`, never in prose.
 
+**Release gates:** a run refuses to publish unless every competitive race
+carries data grade A or B, a new model version moves at least 75% of
+comparable competitive races, and the expert-ratings feed delivered
+current-cycle coverage. Results are stored and served at
+`/api/data-health`.
+
 **Known weaknesses:**
 
-* Unpolled races rely on seat history and national environment only; where
-  no seat prior is ingested, intervals widen and quality grades drop.
+* Only 43 of 470 2026 races carry any polling. Those races now lean on the
+  expert-ratings overlay instead of seat history alone, which is a large
+  measured improvement (see claim R-001) but is still a secondary signal:
+  the overlay's weight is capped at 0.75 and its interval is widened 1.45x
+  for the gap between the final-vintage ratings it is fitted on and the
+  months-out ratings it is applied to.
+* The overlay does not act on House seats every rater calls safe — that is
+  outside the population its slope was fitted on. Where the model calls such
+  a seat competitive anyway, the disagreement is published
+  (`competitive_but_consensus_safe`) rather than reconciled.
+* Expert ratings are other forecasters' judgements, not primary observation.
+  Using them imports their errors, and their correlation with each other
+  means the consensus is narrower evidence than the rater count suggests.
+* Where no seat prior is ingested, intervals widen and quality grades drop.
 * Incumbency = current seat holder; announced retirements are not marked
   open without a candidate-status source.
 * FEC totals now retain immutable reporting vintages and expose stage,

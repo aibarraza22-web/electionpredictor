@@ -286,16 +286,28 @@ async function openDetail(id){
   }catch(e){ $("#dPolls").textContent=""; }
 }
 
+function expertRatings(er,ov){
+  if(!er||!er.raters||!er.raters.length) return "";
+  const rows=er.raters.slice().sort((x,y)=>String(y.rating_date).localeCompare(String(x.rating_date)));
+  return `<h2 style="margin-top:.8rem">What the handicappers say <small>— ${er.n_raters} published ratings, newest ${esc(er.newest_rating_date)}${er.age_days!=null?` (${er.age_days}d old)`:""}; each rater's own latest call</small></h2>
+    <div class="tablewrap"><table><thead><tr><th>Rater</th><th>Rating</th><th>As of</th></tr></thead><tbody>`+
+    rows.map(r=>`<tr style="cursor:default"><td>${esc(r.rater)}</td><td class="mono">${esc(r.rating)}</td><td class="mono muted">${esc(r.rating_date)}</td></tr>`).join("")+
+    `</tbody></table></div>
+    <div class="small muted" style="margin-top:.35rem">Consensus <span class="mono">${(+er.consensus).toFixed(2)}</span> on a −4 (Safe R) … +4 (Safe D) scale · rater disagreement <span class="mono">${(+er.disagreement).toFixed(2)}</span>. ${ov&&ov.applied?`Moves this forecast by <span class="mono">${sgn(ov.margin_shift)}</span> (fitted ${(+ov.slope_margin_points_per_rating_step).toFixed(2)} margin points per rating step, blended at ${(ov.blend_weight*100).toFixed(0)}%).`:`Not used to move this forecast: ${esc((ov&&ov.reason)||"no fitted overlay for this seat")}.`}</div>`;
+}
+
 function campaignAnalysis(a){
   if(!a||!Object.keys(a).length) return "";
   const v=a.victory_bands||{}, fin=(a.finance||{}).comparison, ch=a.change_since_previous, cad=a.campaign_adjustment_detail||{};
   const money=fin?`D/R receipts ${fin.dem_to_rep_receipts_ratio??"—"}× · cash ${fin.dem_to_rep_cash_ratio??"—"}× · capacity signal ${Math.abs(fin.descriptive_campaign_signal||0)<.005?"neutral":(fin.descriptive_campaign_signal>0?"D":"R")+" "+Math.abs(fin.descriptive_campaign_signal).toFixed(2)} · credibility ${pct(fin.signal_credibility||0)}`:
     "No comparable Democratic and Republican FEC vintages yet";
   const inputs=(cad.active_inputs||[]).length?(cad.active_inputs||[]).join(", "):"none";
-  return `<h2 style="margin-top:.8rem">Race development <small>— active provisional campaign overlay</small></h2>
+  const ov=a.expert_rating_overlay||{}, er=a.expert_ratings||null;
+  return `${expertRatings(er,ov)}<h2 style="margin-top:.8rem">Race development <small>— how the published margin is built</small></h2>
     <div class="grid g4">
       <div class="tile"><div class="lbl">Structural baseline</div><div class="big mono" style="font-size:1.15rem">${sgn(a.structural_baseline_margin||0)}</div></div>
       <div class="tile"><div class="lbl">Polling adjustment</div><div class="big mono" style="font-size:1.15rem">${sgn(a.polling_adjustment||0)}</div></div>
+      <div class="tile"><div class="lbl">Expert ratings adjustment</div><div class="big mono" style="font-size:1.15rem">${sgn(a.expert_rating_adjustment||0)}</div><div class="det">${ov.applied?`weight ${(ov.blend_weight*100).toFixed(0)}% · ${esc(ov.stratum||"")}`:esc(ov.reason||"not applied")}</div></div>
       <div class="tile"><div class="lbl">Campaign adjustment</div><div class="big mono" style="font-size:1.15rem">${sgn(a.campaign_adjustment||0)}</div><div class="det">${esc(inputs)} · +${(+cad.added_sigma||0).toFixed(2)} uncertainty</div></div>
       <div class="tile"><div class="lbl">Change from prior snapshot</div><div class="big mono" style="font-size:1.15rem">${ch?sgn(ch.margin_points):"—"}</div><div class="det">${ch?(ch.dem_probability_points>=0?"+":"")+ch.dem_probability_points.toFixed(2)+" probability points":"first snapshot"}</div></div>
     </div>

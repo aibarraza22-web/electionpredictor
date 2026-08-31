@@ -17,6 +17,7 @@ from . import store
 from .domain import normal_cdf
 from .features import FEATURE_NAMES, FeatureRow, PollLookup, ResultLookup, historical_rows
 from .model import MIN_SIGMA, MarginModel, ridge_fit
+from .ratings import RatingLookup
 
 MIN_TRAINING_CYCLES = 3
 
@@ -201,6 +202,7 @@ def walk_forward(rows: list[FeatureRow], chamber: str,
                 "low95": low95, "high95": high95,
                 "low50": low50, "high50": high50,
                 "polled": row.poll_count > 0,
+                "rated": bool(row.detail.get("ratings")),
                 "training_cycles": sorted(training_cycles),
             })
         evaluated.append(test_cycle)
@@ -237,6 +239,7 @@ def walk_forward_baseline(rows: list[FeatureRow], chamber: str, feature_idx: lis
                 "low95": mean - 1.960 * sigma, "high95": mean + 1.960 * sigma,
                 "low50": mean - .674 * sigma, "high50": mean + .674 * sigma,
                 "polled": row.poll_count > 0,
+                "rated": bool(row.detail.get("ratings")),
             })
     return scored
 
@@ -258,6 +261,12 @@ def subgroup_metrics(scored: list[dict], rows_by_key: dict[tuple, FeatureRow]) -
         "safe_actual_ge10": sel(lambda s: abs(s["actual_margin"]) >= 10),
         "dem_held_seats": sel(lambda s: (r := row_of(s)) is not None and r.x[3] > 0),
         "rep_held_seats": sel(lambda s: (r := row_of(s)) is not None and r.x[3] < 0),
+        # Seats with published expert ratings as of the forecast date. The
+        # ratings overlay only acts here, so this is the slice its effect has
+        # to be read on -- the aggregate is dominated by the ~10k historical
+        # rows no handicapper ever rated.
+        "rated_seats": sel(lambda s: s.get("rated")),
+        "unrated_seats": sel(lambda s: not s.get("rated")),
     }
 
 
@@ -316,7 +325,7 @@ def topline_estimator_backtest(results: ResultLookup, poll_lookup: PollLookup,
 
 
 def horizon_metrics(results: ResultLookup, poll_lookup: PollLookup,
-                    chamber: str) -> dict:
+                    chamber: str, rating_lookup=None) -> dict:
     """Production-model accuracy at earlier poll cutoffs.
 
     The evaluation population is held FIXED — races that had polls by
@@ -326,7 +335,8 @@ def horizon_metrics(results: ResultLookup, poll_lookup: PollLookup,
     shifting population would otherwise shrink to tiny, unrepresentative
     samples at long horizons.
     """
-    eve_rows = historical_rows(results, poll_lookup, chamber)
+    eve_rows = historical_rows(results, poll_lookup, chamber,
+                               rating_lookup=rating_lookup)
     eligible = {(r.cycle, r.seat_key) for r in eve_rows if r.poll_count > 0}
     out = {}
     for days_before, cutoffs in (
@@ -334,7 +344,8 @@ def horizon_metrics(results: ResultLookup, poll_lookup: PollLookup,
             (30, {c: f"{c}-10-09" for c in range(1998, 2026, 2)}),
             (90, {c: f"{c}-08-10" for c in range(1998, 2026, 2)})):
         rows = eve_rows if cutoffs is None else historical_rows(
-            results, poll_lookup, chamber, election_dates=cutoffs)
+            results, poll_lookup, chamber, election_dates=cutoffs,
+            rating_lookup=rating_lookup)
         scored, _ = walk_forward(rows, chamber)
         subset = [s for s in scored if (s["cycle"], s["seat_key"]) in eligible]
         out[str(days_before)] = metrics(subset)
@@ -355,14 +366,16 @@ CHAMPION_SCORING_SINCE = 2010
 
 def select_chamber_champions(results: ResultLookup, poll_lookup: PollLookup,
                              state_lean=None,
-                             scoring_since: int = CHAMPION_SCORING_SINCE) -> dict[str, dict]:
+                             scoring_since: int = CHAMPION_SCORING_SINCE,
+                             rating_lookup=None) -> dict[str, dict]:
     """Choose each chamber's champion spec by held-out log loss on recent
     cycles (>= ``scoring_since``), under the identical walk-forward protocol
     (which still trains each fit on all strictly-earlier cycles). Returns
     ``{chamber: {"name", "kwargs", "scoreboard"}}``."""
     champions: dict[str, dict] = {}
     for chamber in ("house", "senate"):
-        rows = historical_rows(results, poll_lookup, chamber, state_lean=state_lean)
+        rows = historical_rows(results, poll_lookup, chamber, state_lean=state_lean,
+                               rating_lookup=rating_lookup)
         scoreboard = {}
         for name, kwargs in CHAMPION_CANDIDATES.items():
             scored, _ = walk_forward(rows, chamber, model_kwargs=kwargs)
@@ -385,10 +398,12 @@ def run_backtests(model_version: str) -> list[dict]:
     horizon breakdowns, plus every baseline under the identical protocol."""
     results = ResultLookup(store.all_results())
     poll_lookup = PollLookup(store.all_polls())
+    rating_lookup = RatingLookup(store.all_race_ratings())
     runs = []
     comparison: dict[str, dict[str, dict]] = {}
     for chamber in ("house", "senate"):
-        rows = historical_rows(results, poll_lookup, chamber)
+        rows = historical_rows(results, poll_lookup, chamber,
+                               rating_lookup=rating_lookup)
         rows_by_key = {(r.cycle, r.seat_key): r for r in rows}
         scored, evaluated = walk_forward(rows, chamber)
         if not scored:
@@ -415,7 +430,8 @@ def run_backtests(model_version: str) -> list[dict]:
                 "design": "expanding-window prequential",
                 "poll_cutoff": "election day", "min_training_cycles": MIN_TRAINING_CYCLES,
                 "subgroups": subgroup_metrics(scored, rows_by_key),
-                "horizons_days_before_election": horizon_metrics(results, poll_lookup, chamber),
+                "horizons_days_before_election": horizon_metrics(
+                    results, poll_lookup, chamber, rating_lookup=rating_lookup),
                 "extended_metrics": {k: summary.get(k) for k in (
                     "coverage50", "expected_calibration_error",
                     "calibration_intercept", "calibration_slope",
@@ -489,7 +505,9 @@ def run_backtests(model_version: str) -> list[dict]:
                 "config": json.dumps({
                     "design": "expanding-window prequential (baseline)",
                     "features": [FEATURE_NAMES[i] for i in spec["features"]],
-                    "polled_only": spec["polled_only"]}),
+                    "polled_only": spec["polled_only"],
+                    "rated_seat_metrics": metrics(
+                        [b for b in baseline_scored if b.get("rated")])}),
             }
             store.save_backtest_run(baseline_run)
             comparison[chamber][name] = {

@@ -49,6 +49,39 @@ missing values — absent inputs are flagged and widen uncertainty instead.
     re-download the file from
     https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/IG0UN2
     and replace `data/vintage/medsl_us_house_1976_2024.tab`.
+* **`race_ratings`** — published expert race ratings, from Wikipedia's
+  election-ratings tables (CC BY-SA 4.0; each column cites its underlying
+  source). Two page shapes are parsed:
+  * the national **ratings pages** (`{cycle} United States House of
+    Representatives election ratings` and `{cycle} United States Senate
+    elections`), which carry one column per handicapper with that column's
+    publication date — every Senate seat, and every House seat some rater
+    declines to call safe;
+  * the per-state **House articles** (`{cycle} United States House of
+    Representatives elections in {state}`), whose per-district *Predictions*
+    tables cover **all 435 districts**, safe seats included, each row dated
+    individually.
+
+  Cycles 2016–2026 are ingested; the historical ones are what the overlay's
+  coefficient is fitted on. Raters covered include Cook Political Report,
+  Inside Elections, Sabato's Crystal Ball, Decision Desk HQ, The Economist,
+  Split Ticket, Silver Bulletin, RealClearPolitics, Race to the WH, Fox News,
+  FiftyPlusOne and FiveThirtyEight. Names are canonicalized (`DDHQ` and
+  `Decision Desk HQ` are one rater) because the consensus is an unweighted
+  mean and a duplicate would silently double-weight that organisation.
+  Cook PVI, retirement status and last result are stored alongside in
+  `seat_context` for provenance and display.
+
+  **Why Wikipedia and not the handicappers directly**: cookpolitical.com,
+  centerforpolitics.org and insideelections.com all answer automated clients
+  with HTTP 403. The Wikipedia mirror is retrievable, carries per-column
+  publication dates (which is what makes it vintage-safe), and cites every
+  underlying source. **Why `urllib` and not `httpx`**: Wikimedia's bot policy
+  currently 403s httpx's client signature on every endpoint — article HTML,
+  `action=raw`, `api.php` and `api.wikimedia.org` alike — while serving the
+  identical request from the standard library. Both were verified against
+  these exact pages before the adapter shipped.
+
 * **`fec`** — official FEC API candidate totals for 2026 (public domain;
   requires `FEC_API_KEY`). The compact `finance` table is updated on every
   run, while `finance_snapshots` keeps content-addressed reporting vintages,

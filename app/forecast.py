@@ -1070,7 +1070,7 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
         overlay = overlays[race["chamber"]]
         prediction, overlay_detail = overlay.apply(
             model_prediction, consensus_of(row), overlay_context[race["chamber"]],
-            polled=row.poll_count > 0)
+            polled=row.poll_count > 0, summary=rating_summary)
         finance = finance_context(by_finance.get(race["seat_key"], []), as_of,
                                   ELECTION_DATE, chamber=race["chamber"])
         party_by_candidate = {

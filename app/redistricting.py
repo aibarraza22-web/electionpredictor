@@ -97,12 +97,41 @@ def current_map_cycle(state: str) -> int:
     return MIDDECADE_REMAP_CYCLE.get(state, POST_CENSUS_CYCLE)
 
 
+def map_change_cycles(state: str) -> tuple[int, ...]:
+    """Every cycle at which this state started using a NEW U.S. House map.
+
+    A state's redistricting history is a SEQUENCE of events, not a single
+    current map. Every state redrew for 2022 after the 2020 census; ten of
+    them redrew again mid-decade for 2026. Collapsing that to one "current"
+    cycle made ``prior_is_stale`` blind to the earlier event: for California
+    it returned only 2026, so a 2020 result judged against the 2022 map read
+    as fresh (``2020 < 2026 <= 2022`` is false) even though the post-census
+    redraw plainly superseded it.
+
+    That mattered beyond bookkeeping. It silently withheld 48 of the 143 rated
+    2022 seats -- every one of them in a state that later remapped -- from the
+    redrawn overlay stratum, so the stratum was fitted on states that did NOT
+    remap again and then applied to 2026 seats in states that did.
+    """
+    cycles = {POST_CENSUS_CYCLE}
+    mid = MIDDECADE_REMAP_CYCLE.get(state)
+    if mid is not None:
+        cycles.add(mid)
+    return tuple(sorted(cycles))
+
+
 def prior_is_stale(state: str, prior_cycle: int, target_cycle: int) -> bool:
-    """True if a district result from ``prior_cycle`` predates the map now in
-    effect for ``target_cycle`` (i.e. it describes superseded boundaries)."""
+    """True if a district result from ``prior_cycle`` predates any map change
+    that has taken effect by ``target_cycle`` (i.e. it describes superseded
+    boundaries).
+
+    Checks EVERY map change in the window, not just the most recent one, so a
+    state that redrew twice is handled correctly at both transitions.
+    """
     if prior_cycle is None:
         return False
-    return prior_cycle < current_map_cycle(state) <= target_cycle
+    return any(prior_cycle < change <= target_cycle
+               for change in map_change_cycles(state))
 
 
 # ---------------------------------------------------------------------------

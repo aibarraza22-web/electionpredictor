@@ -5,7 +5,8 @@ from app.domain import quality_grade
 from app.ingest import race_ratings
 from app.ratings import (RatingLookup, RatingOverlay, is_unanimously_safe,
                          overlay_consensus, rating_evidence_points)
-from app.redistricting import NET_DEM_SEAT_SHIFT, current_map_cycle, prior_is_stale
+from app.redistricting import (NET_DEM_SEAT_SHIFT, current_map_cycle,
+                               map_change_cycles, prior_is_stale)
 
 
 NATIONAL_HOUSE_PAGE = """
@@ -340,3 +341,28 @@ def test_overlay_uses_the_redrawn_weight_when_applying():
     # At full weight the model's stale margin is replaced outright.
     assert blended.mean == pytest.approx(-16.0)
     assert detail["ratings_implied_margin"] == pytest.approx(-16.0)
+
+
+def test_a_state_that_redrew_twice_is_stale_at_both_transitions():
+    """Redistricting history is a sequence, not a single current map.
+
+    Treating it as one "current" cycle made prior_is_stale blind to the
+    earlier event: California returned only 2026, so a 2020 result judged
+    against the 2022 map read as fresh. That withheld 48 of the 143 rated 2022
+    seats -- every one in a state that later remapped -- from the redrawn
+    overlay stratum, fitting it on states that did NOT remap again and
+    applying it to 2026 seats in states that did.
+    """
+    assert map_change_cycles("CA") == (2022, 2026)
+    assert map_change_cycles("AR") == (2022,)
+    # Both transitions must register for a twice-redrawn state.
+    assert prior_is_stale("CA", 2020, 2022) is True    # post-2020-census redraw
+    assert prior_is_stale("CA", 2024, 2026) is True    # mid-decade redraw
+    # ...and a window containing no map change must not.
+    assert prior_is_stale("CA", 2022, 2024) is False
+    # A state that only redrew once behaves the same way at its one event.
+    assert prior_is_stale("AR", 2020, 2022) is True
+    assert prior_is_stale("AR", 2024, 2026) is False
+    # current_map_cycle still reports the latest map, for callers that want it.
+    assert current_map_cycle("CA") == 2026
+    assert current_map_cycle("AR") == 2022

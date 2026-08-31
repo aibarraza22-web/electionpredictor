@@ -54,12 +54,19 @@ A **redrawn** seat is one whose district lines changed after its most recent
 result, so its prior margin describes boundaries that no longer exist: the
 model's strongest feature is known-wrong for exactly that seat, while the
 handicappers are looking at the new map. That stratum is allowed up to 1.00
-and the held-out fit takes it there (log loss 0.3928 at w=1.00 vs 0.4023 at
-0.75), with the tightest fitted residual sigma of the three (4.84, against
-6.89 polled and 10.28 unpolled). The 2022 cycle supplies the population to fit
+and the held-out fit takes it there (log loss 0.3908 at w=1.00 vs 0.4017 at
+0.75), with the tightest fitted residual sigma of the three (5.11, against
+6.97 polled and 10.61 unpolled). The 2022 cycle supplies the population to fit
 on: the post-2020-census maps took effect that year, so every 2022 House
-seat's 2020 prior is stale while 2018/2020/2024 priors are not. See claim
-R-004.
+seat's 2020 prior is stale while 2018/2020/2024 priors are not — 139 held-out
+seats. See claim R-004.
+
+Redistricting history is treated as a **sequence** of map changes per state,
+not a single current map, so a state that redrew for 2022 and again for 2026
+reads as stale at both transitions. Reading only the latest map withheld 48 of
+those 143 seats — every one in a state that later remapped — which would have
+fitted the stratum on a geographically selected subset and then applied it to
+precisely the excluded states.
 
 The unanimously-safe exclusion below is lifted for redrawn seats, and has to
 be: it was stranding the worst cases. CA-40 published as D+22.8 while all ten

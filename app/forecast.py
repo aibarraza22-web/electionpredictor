@@ -730,8 +730,8 @@ RESEARCH_CLAIMS.extend([
      "claim": "ACCEPTED: on a seat whose district was redrawn after its most "
               "recent result, the expert consensus should fully replace the "
               "model's margin -- fitted blend weight 1.00 for the redrawn "
-              "stratum versus 0.75 elsewhere, held-out log loss 0.3928 vs "
-              "0.4023 at 0.75.",
+              "stratum versus 0.75 elsewhere, held-out log loss 0.3908 vs "
+              "0.4017 at 0.75.",
      "chamber": "house",
      "metric": "walk-forward log loss on rated seats whose district prior is stale",
      "mechanism": "A redrawn seat's prior margin describes boundaries that no "
@@ -742,12 +742,19 @@ RESEARCH_CLAIMS.extend([
      "validation": "The 2022 cycle is the natural experiment: post-2020-census "
                    "maps took effect that year, so every 2022 House seat's 2020 "
                    "prior is stale while 2018/2020/2024 priors are not. That "
-                   "gives 95 held-out redrawn rated seats, fitted under the same "
+                   "gives 139 held-out redrawn rated seats, fitted under the same "
                    "walk-forward protocol as every other weight. The redrawn "
                    "stratum also has the TIGHTEST fitted residual sigma of the "
-                   "three (4.84 vs 6.89 polled and 10.28 unpolled). Overall "
-                   "House rated-seat metrics improved with it: Brier 0.1325 -> "
-                   "0.1315, winner accuracy 0.8449 -> 0.8490, MAE 6.00 -> 5.90.",
+                   "three (5.11 vs 6.97 polled and 10.61 unpolled). Overall "
+                   "House rated-seat metrics improved with it: Brier 0.1643 -> "
+                   "0.1303, winner accuracy 0.7735 -> 0.8531, MAE 9.69 -> 5.78. "
+                   "The population is the corrected one: redistricting history "
+                   "is a SEQUENCE of map changes, so a state that redrew both "
+                   "for 2022 and again for 2026 is stale at both transitions. "
+                   "Reading only the latest map withheld 48 of the 143 rated "
+                   "2022 seats -- every one in a state that later remapped -- "
+                   "which fitted the stratum on a geographically selected "
+                   "subset and then applied it to exactly the excluded states.",
      "decision": "Fit and apply a third `redrawn` stratum with a 1.00 ceiling, "
                  "and lift the unanimously-safe exclusion for those seats -- it "
                  "was stranding the worst cases (CA-40 published D+22.8 while "

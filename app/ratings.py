@@ -413,19 +413,33 @@ class RatingOverlay:
         return bool(self.fit_meta.get("fitted"))
 
     def apply(self, prediction, consensus: float | None, context: dict | None,
-              polled: bool) -> tuple[object, dict]:
+              polled: bool, summary: dict | None = None) -> tuple[object, dict]:
         """Return ``(blended prediction, explanation)``.
 
         With no rating, no fit, or no cycle context the model's own prediction
         is returned untouched — the overlay never invents a signal.
+
+        ``summary`` is the seat's full rating summary and is used only to
+        explain *why* an unused rating was unused: a seat every rater calls
+        safe has plenty of published ratings, and reporting "no published
+        rating" next to a table of them is simply wrong.
         """
         from .model import Prediction
 
         if consensus is None or context is None or not self.is_fitted:
-            return prediction, {"applied": False,
-                                "reason": "no published rating for this seat"
-                                          if consensus is None else
-                                          "overlay not fitted for this chamber"}
+            if not self.is_fitted:
+                reason = "no fitted overlay for this chamber"
+            elif context is None:
+                reason = "no rated seats in this cycle to anchor the overlay"
+            elif is_unanimously_safe(summary):
+                reason = ("every rater calls this seat safe, which is outside "
+                          "the competitive population the overlay's slope was "
+                          "fitted on")
+            elif summary:
+                reason = "published ratings are not usable for this seat"
+            else:
+                reason = "no published rating for this seat"
+            return prediction, {"applied": False, "reason": reason}
         stratum = "polled" if polled else "unpolled"
         weight = self.weights.get(stratum, 0.0)
         if weight <= 0.0:

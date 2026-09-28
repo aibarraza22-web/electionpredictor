@@ -488,7 +488,16 @@ def list_model_versions() -> list[dict]:
 
 
 def seed_research_claims(rows: Iterable[dict]) -> None:
-    insert_rows("research_claims", list(rows))
+    """Upsert: a claim's status and validation change as research moves on
+    (e.g. superseded when the model changes), so re-seeding must update
+    stored rows, not silently keep the first version ever written."""
+    rows = list(rows)
+    if not rows:
+        return
+    t = db.research_claims
+    with db.get_engine().begin() as c:
+        c.execute(delete(t).where(t.c.id.in_([r["id"] for r in rows])))
+    insert_rows("research_claims", rows)
 
 
 def seed_research_evidence(rows: Iterable[dict]) -> None:

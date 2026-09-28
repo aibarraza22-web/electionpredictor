@@ -1,10 +1,11 @@
 # Model card
 
-**Model version:** 2026.20 — chamber-specific ridge regressions
-(fundamentals + polling tiers) trained on ingested primary-source history,
-blended with a walk-forward-fitted overlay on published expert race ratings,
-then a bounded campaign-development adjustment. Each layer is attributed
-separately in every frozen snapshot.
+**Model version:** 2026.21 — poll-free track-record model
+(`app/track_record.py`): five ridge systems over certified results, Cook PVI on
+current lines, incumbency and the national midterm pattern; each chamber
+publishes the system with the best out-of-sample close-race record, with
+per-race uncertainty sized by the seat's and state's own past misses. No polls,
+no expert ratings, no campaign layer.
 
 **Use:** research, transparent forecast workflow development, and public
 forecast presentation with the provenance caveats below surfaced by
@@ -18,13 +19,33 @@ counts are stored with each fit in `model_versions.coefficients`.
 and after controlled methodology changes. Frequent data-only refreshes reuse
 the last validated model. Metrics live in `/api/backtests`, never in prose.
 
-**Release gates:** a run refuses to publish unless every competitive race
-carries data grade A or B, a new model version moves at least 75% of
-comparable competitive races, and the expert-ratings feed delivered
-current-cycle coverage. Results are stored and served at
-`/api/data-health`.
+**Validation (2026.21):** the whole procedure is replayed per held-out cycle
+2012–2024 using only earlier cycles. Against the previous polls + ratings
+model on the same races (2014–2024): House 94.8% vs 94.5% of races called,
+toss-ups 74.0% vs 74.5%, but a larger seat-total miss in wave years (mean 14.0
+vs 11.8 seats; 2018: −37 vs −26); Senate 91.1% vs 92.1%, toss-ups 70.7% vs
+72.4%, seat-total miss 2.3 vs 2.7. Without polls the size of a national wave
+is the main thing the model cannot see; the simulation's national-shock term
+(±6.8 House / ±6.1 Senate margin points, from past cycle-level misses) carries
+that uncertainty.
+
+**Release gates:** a run refuses to publish unless every race has
+presidential partisanship on its current lines and ≥95% have a known ballot
+status, every competitive race carries data grade A–C (C = partisanship +
+ballot status, the most a redrawn seat can have), and a new model version
+moves at least 75% of comparable competitive races. Results are stored and
+served at `/api/data-health`.
 
 **Known weaknesses:**
+
+* (2026.21) Without polls the model knows only the *average* midterm swing,
+  not this year's. It rates 12 Republican-held swing seats (e.g. PA-07,
+  NY-17, CO-08, IA-01) Republican where handicappers lean Democratic; these
+  disagreements are published at `/api/data-health`
+  (`model_vs_consensus_sign_conflicts`) rather than reconciled.
+* (2026.21) Incumbency is one average effect. An incumbent running in a
+  heavily redrawn district (AL-02, FL-09) likely keeps less of it than the
+  historical average credits.
 
 * Only 43 of 470 2026 races carry any polling. Those races now lean on the
   expert-ratings overlay instead of seat history alone, which is a large

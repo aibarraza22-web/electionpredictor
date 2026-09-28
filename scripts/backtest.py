@@ -1,4 +1,4 @@
-"""Run expanding-window backtests against ingested data and persist metrics."""
+"""Replay the poll-free model walk-forward on ingested history and persist metrics."""
 from __future__ import annotations
 
 import json
@@ -8,13 +8,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from app import store  # noqa: E402
-from app.backtest import run_backtests  # noqa: E402
-from app.forecast import MODEL_VERSION  # noqa: E402
+from app.forecast import run_track_record_backtests  # noqa: E402
 
 
 def main() -> int:
     store.init_db()
-    runs = run_backtests(MODEL_VERSION)
+    runs = run_track_record_backtests()
     if not runs:
         print("no backtests produced: ingest historical results first")
         return 1

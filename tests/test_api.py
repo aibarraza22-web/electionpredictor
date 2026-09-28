@@ -61,7 +61,8 @@ def test_race_universe_and_forecasts(client):
     assert len(forecasts["forecasts"]) == 435
     control = client.get("/api/forecast/control").json()
     assert 0 <= control["house"]["democratic_control_probability"] <= 1
-    assert control["senate"]["tie_break_assumption"] == "democratic"
+    # Vice President JD Vance (R) breaks a 50-50 tie: it is Republican control.
+    assert control["senate"]["tie_break_assumption"] == "republican"
 
 
 def test_race_detail_history_components(client):
@@ -70,14 +71,20 @@ def test_race_detail_history_components(client):
     assert client.get("/api/races/2026-house-CA-01/history").json()
     components = client.get("/api/races/2026-house-CA-01/components").json()
     assert "components" in components
-    campaign = client.get("/api/races/2026-house-CA-01/campaign").json()
-    assert campaign["analysis"]["campaign_adjustment"] == 0.0
-    assert "dem_by_at_least_8" in campaign["analysis"]["victory_bands"]
+    analysis = client.get("/api/races/2026-house-CA-01/campaign").json()["analysis"]
+    assert analysis["method"] == "poll-free track record"
+    assert "dem_by_at_least_8" in analysis["victory_bands"]
+    # every candidate system is shown, and the published one is among them
+    assert len(analysis["every_system"]) == 6 and analysis["system"] in analysis["every_system"]
+    assert "track_record_here" in analysis and "uncertainty" in analysis
     polls = client.get("/api/races/2026-house-CA-01/polls").json()
     assert polls["polls"] == [] and "fabricated" in polls["note"]
 
 
-def test_finance_overlay_changes_published_margin_and_probability(client):
+def test_finance_does_not_move_the_poll_free_forecast(client):
+    """The published forecast only uses inputs that also existed for every past
+    election and were validated on them. Campaign finance was never tested
+    against past outcomes, so adding it must not move a published number."""
     from app import store
     from app.forecast import build_forecasts
 
@@ -97,20 +104,14 @@ def test_finance_overlay_changes_published_margin_and_probability(client):
          "receipts": 100_000, "disbursements": 80_000, "cash_on_hand": 20_000,
          "payload_hash": "R1-weak"},
     ])
-    # Strictly after the fixture's snapshot: /api/races reads the most recent
-    # as_of, so a hardcoded timestamp silently selected the PREVIOUS forecast
-    # once the wall clock passed it, and the assertions below then measured a
-    # build that never saw this finance data.
     later = (datetime.fromisoformat(before["as_of"])
              + timedelta(seconds=1)).isoformat()
     build_forecasts(as_of=later, prefix="demo-finance", enforce_gates=False,
                     with_backtests=False, force=True)
     after = client.get("/api/races/2026-house-CA-01").json()["forecast"]
-    analysis = client.get("/api/races/2026-house-CA-01/campaign").json()["analysis"]
-    assert analysis["campaign_adjustment"] > 0
-    assert after["margin"] != before["margin"]
-    assert after["dem_probability"] != before["dem_probability"]
-    assert analysis["final_margin"] == after["margin"]
+    assert after["as_of"] == later
+    assert after["margin"] == before["margin"]
+    assert after["dem_probability"] == before["dem_probability"]
 
 
 def test_backtests_are_real_runs(client):
@@ -122,11 +123,13 @@ def test_backtests_are_real_runs(client):
     assert "subgroups" in champion["config"]
     detail = client.get(f"/api/backtests/{champion['id']}").json()
     assert detail["by_cycle"]
-    baselines = [r for r in payload["runs"]
-                 if str(r["model_version"]).startswith("baseline")]
-    assert baselines, "baseline comparisons must be stored"
+    systems = [r for r in payload["runs"]
+               if str(r["model_version"]).startswith("challenger-")]
+    assert systems, "every candidate system's replay must be stored"
     comparison = client.get("/api/models/comparison").json()
-    assert "baseline-prior-result" in comparison["chambers"]["house"]
+    # (the compact fixture has a single Senate cycle, so only the House has
+    # held-out cycles to replay)
+    assert {"challenger-pvi_inc", "challenger-ensemble"} <= set(comparison["chambers"]["house"])
 
 
 def test_data_health_reports_demo_mode(client):
@@ -136,8 +139,11 @@ def test_data_health_reports_demo_mode(client):
     # champion snapshots for all 468 races, plus challenger/baseline
     # alternates for the per-race model board
     assert health["counts"]["forecasts"] >= 468
-    assert health["coverage"]["with_candidate_profiles"] == 0
-    assert health["coverage"]["with_campaign_events"] == 0
+    assert health["coverage"]["polls_used"] is False
+    assert health["coverage"]["with_pvi"] == health["coverage"]["races"]
+    track = health["track_record"]
+    assert set(track) == {"house", "senate"}
+    assert track["house"]["published_system"] == track["house"]["ranking"][0]["system"]
 
 
 def test_admin_requires_token(client, monkeypatch):

@@ -1,5 +1,38 @@
 # Methodology
 
+## Current published model: poll-free track record (2026.21)
+
+`app/track_record.py`. Inputs, all poll-free and all available before every
+past election: Cook PVI on the race's current lines, the last contested
+same-map result, statewide House lean, incumbent-on-ballot status, and the
+president's party / midterm year. Uncontested races (±100 margins) are never
+used as targets or priors; "same map" follows the full redistricting history
+(`redistricting.map_changed`: census redraws plus documented mid-decade ones).
+
+Five ridge systems (`SYSTEMS`) — seat history, presidential lean,
+presidential lean + incumbency, last result + state lean, and everything in
+one regression — plus their average. Each system trains only on rows that
+carry its own defining input, and is run walk-forward (trained on cycles
+before the one it predicts). From those out-of-sample records:
+
+* **Which system:** the candidate with the best close-race winner record over
+  2010 onward, re-chosen every run; a race missing that system's defining input
+  falls back to the next-ranked system that has it. Choosing per seat from
+  its last three elections was tested and never beat this (T-004).
+* **How sure:** sigma² = national² + local², where national is the SD of
+  past cycle-mean misses (waves) and local shrinks the seat's and state's own
+  past misses toward the chamber (3 and 20 pseudo-observations).
+* **Odds:** a slope-only logistic calibration of margin/sigma, adopted per
+  chamber only when the walk-forward replay says it beats the raw odds on
+  mean log loss and in most held-out cycles.
+
+The stored backtest replays the whole procedure per held-out cycle using only
+earlier cycles. The sections below describe the previous (poll-based) model,
+whose code remains in `app/model.py`, `app/ratings.py` and `app/campaign.py`
+but no longer publishes.
+
+## Previous model (through 2026.20)
+
 **Model family:** chamber-specific ridge regressions over vintage-safe
 features, predicting the Democratic two-party margin (`app/model.py`,
 coefficients stored as versioned data in `model_versions`).

@@ -9,6 +9,29 @@ system reports `live` only when real ingested sources produced the forecasts,
 `demo` for the clearly-labelled synthetic dataset, and `unconfigured` when
 nothing has been ingested.
 
+## The published forecast uses no polls (model 2026.21)
+
+Every 2026 race is forecast only from inputs that also existed for every
+past election, so the whole system can be replayed on 2012–2024 exactly as it
+runs on 2026 (`app/track_record.py`, research claim T-004):
+
+* **presidential partisanship** — Cook PVI on each district's *current* lines
+  (`data/vintage/cook_pvi_vintages.csv`, one pre-election snapshot per cycle);
+* **seat history** — the last contested result on the same map;
+* **incumbency** — is the sitting member on the ballot
+  (`data/vintage/incumbency_2026.csv` for 2026, certified returns for history);
+* **the national pattern** — the president's party and midterm vs presidential
+  year, fitted from certified results.
+
+Five systems combine those facts differently. Each is run walk-forward, so
+each has a real out-of-sample record on every past race; each chamber
+publishes the one with the best record on past close races, and every race's
+uncertainty is sized by how often the system has missed in that seat and
+state before. Every race page shows that local track record. Polls,
+poll-derived expert ratings and the campaign layer are not forecast inputs.
+Rebuild the 2026 inputs with `python -m app.ingest.ballot_2026` (ballot
+status) and `app.ingest.cook_pvi.build_vintages` (PVI).
+
 ## Quick start (live data)
 
 ```bash

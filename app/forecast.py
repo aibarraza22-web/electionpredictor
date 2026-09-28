@@ -2,26 +2,21 @@
 
 Builds the real race universe (the 435 post-2020-census House districts, the
 33 class-2 Senate seats, and special elections detected from appointed-seat
-term data), trains the model on all ingested history, freezes immutable
-per-race snapshots, and stores chamber-control simulations.
+term data), fits the poll-free track-record model (``app.track_record``) on
+all ingested history, freezes immutable per-race snapshots, and stores
+chamber-control simulations.
 """
 from __future__ import annotations
 
 import json
 from collections import defaultdict
 from datetime import date
-from math import sqrt
 
 from . import gates, store
-from .backtest import run_backtests
-from .campaign import (campaign_adjustment, candidate_context, event_context,
-                       finance_context, forecast_analysis)
 from .domain import rating
-from .features import PollLookup, ResultLookup, build_row
+from .features import ResultLookup
 from .ingest.base import house_seat_key, senate_seat_key
-from .model import MarginModel, Prediction
-from .ratings import (RatingLookup, RatingOverlay, consensus_of,
-                      is_unanimously_safe, rating_evidence_points)
+from .ratings import RatingLookup, is_unanimously_safe
 from .simulation import simulate_control
 
 CYCLE = 2026
@@ -34,7 +29,21 @@ CYCLE = 2026
 # snapshots are immutable per (race_id, as_of, model_version): a same-day
 # rerun under an unchanged version keeps the day's first frozen numbers, so a
 # real prediction-affecting change must bump the version to surface.
-MODEL_VERSION = "2026.20"
+# 2026.21: POLL-FREE. The published forecast is the track-record model
+# (app.track_record, research claim T-004): no polls, no poll-derived expert
+# ratings, no unvalidated campaign layer -- only inputs that also existed for
+# every past election, so the whole system is replayed on 2010-2024 exactly as
+# it runs on 2026.
+MODEL_VERSION = "2026.21"
+# Competitive races must have at least presidential partisanship on their
+# current lines plus a known ballot status (grade C). Redrawn 2026 seats have,
+# by construction, no same-map history, so A/B cannot be required of them.
+POLL_FREE_REQUIRED_GRADES = {"A", "B", "C"}
+# A 50-50 Senate is decided by the Vice President's vote. Vice President
+# JD Vance (R) holds it through January 2029, so a tie is REPUBLICAN control.
+# Earlier versions simulated the tie as Democratic control, overstating the
+# Democrats' Senate chances by the full probability of a 50-50 outcome.
+SENATE_TIE_BREAK_PARTY = "republican"
 # Release-gate floor: the 2026 map has 153 House seats and all 35 Senate seats
 # on the published ratings pages. Anything far below that means the ratings
 # ingest failed and the forecast would silently fall back to history alone.
@@ -491,7 +500,7 @@ RESEARCH_CLAIMS = [
                  "at the time; re-testing after the Senate-data and champion-selection changes "
                  "reversed it, which is why estimator choice is re-run rather than assumed.",
      "source": "This project's walk-forward backtests, in response to a user topline-statistic idea"},
-    {"id": "P-006", "claim": "FIXED: win probabilities were derived from MARGIN-SIZE uncertainty, "
+    {"id": "P-007", "claim": "FIXED: win probabilities were derived from MARGIN-SIZE uncertainty, "
                              "which made genuinely safe seats read as competitive and erased "
                              "toss-ups.",
      "chamber": "both", "metric": "Brier / log loss / winner accuracy, walk-forward 2010-2024",
@@ -791,6 +800,112 @@ RESEARCH_CLAIMS.extend([
      "source": "User: the topline numbers still haven't changed at all"},
 ])
 
+RESEARCH_CLAIMS.extend([
+    {"id": "T-004",
+     "claim": "A forecast with NO polls -- built only from certified results, presidential "
+              "partisanship (Cook PVI), incumbency and the national midterm pattern, and "
+              "judged by its own track record on past elections -- calls individual races "
+              "about as well as the polls + expert-ratings model it replaces.",
+     "chamber": "both",
+     "metric": "winner accuracy (all / toss-ups decided by <10), log loss, seat-total error, "
+               "walk-forward replay 2012-2024",
+     "mechanism": "Five poll-free systems (seat history; presidential lean; presidential lean "
+                  "+ incumbency; last result + state lean; everything in one regression) are "
+                  "each run walk-forward, so every one has a genuine out-of-sample record on "
+                  "every past race. Tested two ways of using that record. (1) WHICH SYSTEM: "
+                  "choosing a different system per seat from its last three elections never "
+                  "beat one system chosen on the chamber's hundreds of past close races "
+                  "(House 94.4% vs 94.6% of races, toss-ups 73.4% vs 74.0%; Senate 88.6% vs "
+                  "91.6%, toss-ups 68.0% vs 72.0%; per-state choice was worse still) -- three "
+                  "elections cannot tell skill from luck. The chamber-wide choice is stable: "
+                  "it picked the same system in every cycle from 2014 on. (2) HOW SURE: a "
+                  "seat's and state's own past misses DO predict their future misses. Each "
+                  "race's uncertainty is a shared national term plus a local term shrunk "
+                  "from its own and its state's residuals: log loss improved in 11 of 12 "
+                  "held-out chamber-cycles vs one uniform uncertainty (House 0.179 -> 0.171, "
+                  "Senate 0.268 -> 0.260).",
+     "status": "Production",
+     "validation": "Whole procedure replayed per held-out cycle using only earlier cycles "
+                   "(system choice, per-race fallback, uncertainty, calibration). vs the "
+                   "polls + ratings model on the same races, 2014-2024: House 94.8% vs 94.5% "
+                   "of races, toss-ups 74.0% vs 74.5%, mean seat-total miss 14.0 vs 11.8 "
+                   "(polls mainly help size a wave: 2018 miss -37 vs -26); Senate 91.1% vs "
+                   "92.1%, toss-ups 70.7% vs 72.4%, seat-total miss 2.3 vs 2.7. Published "
+                   "systems: House = presidential lean + incumbency, Senate = average of all "
+                   "five. Slope-only probability calibration is adopted per chamber only "
+                   "when it beats the raw odds on mean log loss AND in most held-out cycles "
+                   "(both pass: House 4 of 6, Senate 4 of 5); a free intercept was rejected "
+                   "because it would tilt every 2026 toss-up toward the Democrats on four "
+                   "cycles' average miss. The headline rule (T-003) was re-tested: the "
+                   "Senate keeps the simulated total (seat MAE 1.68 vs 2.33, 5 of 6 cycles); "
+                   "the House keeps the count of favored races (the probability total's "
+                   "lower MAE came from 2018 alone and was worse in 4 of 6 cycles).",
+     "decision": "Model 2026.21 publishes the track-record model (app.track_record). Polls, "
+                 "poll-derived expert ratings and the never-backtested campaign layer are no "
+                 "longer forecast inputs; handicapper consensus is kept as a published "
+                 "diagnostic of where the two disagree. Every race page shows the system's "
+                 "record in that seat or state and what every system says.",
+     "source": "User: I don't trust the polls; I want a data-driven system that works for "
+               "previous years -- based on these data points this system correctly predicted "
+               "the past elections here -- applied to 2026, no polls"},
+    {"id": "D-003",
+     "claim": "FIXED DATA BUGS found building the poll-free model: uncontested races and "
+              "mid-decade redistricting silently corrupted seat history, and the PVI "
+              "systems were trained on rows that had no PVI.",
+     "chamber": "both", "metric": "coefficients + held-out log loss",
+     "mechanism": "(a) A race with no major-party opponent is stored as a +/-100 margin; it "
+                  "was used as a seat's 'last result' and as a training target. (b) Only the "
+                  "2022 census and 2026 redraws were recorded, so e.g. PA-13 entered 2018 "
+                  "with a D+100 prior from lines a court had replaced with an R+22 district "
+                  "(historical redraws now listed in redistricting.HISTORICAL_MIDDECADE_REMAPS). "
+                  "(c) Fitting the PVI systems on 1990-2006 rows that have no PVI let "
+                  "incumbency stand in for partisanship: its coefficient inflated to 22.6 "
+                  "margin points and PA-07, NY-17 and CO-08 read as R+19 to R+21.",
+     "status": "Production",
+     "validation": "Uncontested rows excluded from targets and priors; same-map priors use "
+                   "the full redistricting history; each system trains only on rows carrying "
+                   "its own inputs (incumbency -> 11.7 points, within published estimates). "
+                   "Held-out log loss 2014-24: House 0.197 -> 0.169, Senate 0.233 -> 0.224. "
+                   "Up-weighting ex-ante competitive races was tested and not adopted (better "
+                   "in 3 of 6 House cycles, worse in the Senate).",
+     "decision": "track_record.trains_on / usable; redistricting.map_changed; "
+                 "track_record.UNCONTESTED.",
+     "source": "Found while validating T-004"},
+    {"id": "S-007",
+     "claim": "FIXED BUG: the control simulation counted a 50-50 Senate as Democratic "
+              "control.",
+     "chamber": "senate", "metric": "Senate control probability",
+     "mechanism": "A tie is broken by the Vice President; JD Vance (R) holds that vote "
+                  "through January 2029, so 50-50 is Republican control. The default "
+                  "tie_break_party='democratic' overstated Democratic chances by the whole "
+                  "probability of a tie.",
+     "status": "Production",
+     "validation": "On the 2026.21 forecast the fix moved Democratic Senate control from "
+                   "54% to 43% before calibration: about one simulation in nine was an "
+                   "exact 50-50 tie.",
+     "decision": "forecast.SENATE_TIE_BREAK_PARTY = 'republican', used by the published "
+                 "simulation and the scenario API.",
+     "source": "Found while validating T-004"},
+])
+
+# Claims whose mechanism the poll-free model (T-004) no longer publishes. Kept
+# in the registry -- the evidence stands -- but no longer driving the forecast.
+_SUPERSEDED_BY_T004 = {
+    "H-002": "polls are not a forecast input",
+    "D-001": "polls are not a forecast input",
+    "D-002": "polls are not a forecast input",
+    "P-006": "the campaign layer was never validated on past elections",
+    "C-001": "the campaign layer was never validated on past elections",
+    "C-002": "the campaign layer was never validated on past elections",
+    "C-003": "the campaign layer was never validated on past elections",
+    "R-001": "expert ratings are largely poll-derived; kept as a diagnostic only",
+    "R-004": "redrawn seats now use presidential partisanship on their NEW lines",
+    "H-006": "redrawn seats now use presidential partisanship on their NEW lines",
+}
+for _claim in RESEARCH_CLAIMS:
+    if _claim["id"] in _SUPERSEDED_BY_T004:
+        _claim["status"] = f"Superseded by T-004 (2026.21): {_SUPERSEDED_BY_T004[_claim['id']]}"
+
 RESEARCH_EVIDENCE = [
     {"id": "E-R001-RATINGS", "claim_id": "R-001",
      "citation": "Wikipedia, United States House/Senate election ratings (2016-2026), "
@@ -886,8 +1001,20 @@ def _poll_age_days(last_poll_date: str | None, as_of: str) -> int | None:
 
 
 def build_race_universe() -> list[dict]:
-    """Upsert the 2026 race table from ingested incumbency data."""
+    """Upsert the 2026 race table from ingested incumbency data.
+
+    ``open_seat`` means the sitting member is NOT on the November ballot
+    (retiring, lost renomination, redistricted away), from the bundled 2026
+    ballot-status snapshot; without a status row it falls back to "no
+    sitting member"."""
+    from .incumbency import ballot_status
     incumbents = store.all_incumbents(CYCLE)
+    statuses = ballot_status(CYCLE)
+
+    def is_open(seat_key: str, incumbent: dict | None) -> bool:
+        status = statuses.get(seat_key)
+        return (not status["running"]) if status else incumbent is None
+
     timestamp = store.now()
     rows: list[dict] = []
     for state, seats in HOUSE_APPORTIONMENT.items():
@@ -900,7 +1027,7 @@ def build_race_universe() -> list[dict]:
                 "name": f"{state}-{number:02d}",
                 "incumbent_party": incumbent["party"] if incumbent else None,
                 "incumbent_name": incumbent["name"] if incumbent else None,
-                "open_seat": incumbent is None,
+                "open_seat": is_open(seat_key, incumbent),
                 "special": False,
                 "election_system": "ranked_choice" if state in RANKED_CHOICE_STATES else "plurality",
                 "updated_at": timestamp,
@@ -918,7 +1045,7 @@ def build_race_universe() -> list[dict]:
             "state": state, "district": None, "seat_key": seat_key, "name": label,
             "incumbent_party": incumbent["party"] if incumbent else None,
             "incumbent_name": incumbent["name"] if incumbent else None,
-            "open_seat": incumbent is None,
+            "open_seat": is_open(seat_key, incumbent),
             "special": special,
             "election_system": "ranked_choice" if state in RANKED_CHOICE_STATES else "plurality",
             "updated_at": timestamp,
@@ -931,72 +1058,127 @@ def data_version(fingerprint: str, prefix: str = "live") -> str:
     return f"{prefix}-{fingerprint}"
 
 
-def _store_alternative_model_snapshots(training, feature_rows, as_of, version):
-    """Per-race predictions for every challenger and baseline, so users can
-    switch between models on any race and see where they disagree. All are
-    labelled by model_version; the champion alone drives ratings and control
-    simulations."""
-    from statistics import pstdev
+SYSTEM_BOARD_PREFIX = "challenger-"
 
-    from .backtest import BASELINES, CHALLENGERS
-    from .domain import normal_cdf, rating
-    from .model import MIN_SIGMA, MarginModel, ridge_fit
 
-    alternatives = []
-    for name, model_kwargs in CHALLENGERS.items():
-        challenger = MarginModel(**model_kwargs).fit(training)
-        for race_id, row in feature_rows.items():
-            p = challenger.predict(row)
-            low80, high80 = p.interval(1.282)
-            low95, high95 = p.interval(1.960)
-            alternatives.append({
-                "race_id": race_id, "as_of": as_of, "model_version": name,
-                "data_version": version,
-                "dem_probability": round(p.dem_probability, 4),
-                "margin": round(p.mean, 2),
-                "low80": round(low80, 2), "high80": round(high80, 2),
-                "low95": round(low95, 2), "high95": round(high95, 2),
-                "rating": rating(p.dem_probability), "quality": "-",
-                "components": json.dumps({"_model": name})})
-    for name, spec in BASELINES.items():
-        idx = spec["features"]
-        by_chamber: dict[str, tuple[list[float], float]] = {}
-        for chamber in ("house", "senate"):
-            rows = [r for r in training if r.chamber == chamber
-                    and (not spec["polled_only"] or r.poll_count > 0)]
-            if len(rows) < 30:
+def _scored_dicts(rows: list[tuple]) -> list[dict]:
+    """(predicted, sigma, actual, cycle, probability) -> backtest.metrics rows."""
+    out = []
+    for predicted, sigma, actual, cycle, win_probability in rows:
+        out.append({
+            "cycle": cycle, "probability": win_probability,
+            "predicted_margin": predicted, "actual_margin": actual,
+            "dem_won": 1 if actual > 0 else 0,
+            "low80": predicted - 1.282 * sigma, "high80": predicted + 1.282 * sigma,
+            "low95": predicted - 1.960 * sigma, "high95": predicted + 1.960 * sigma,
+            "low50": predicted - 0.674 * sigma, "high50": predicted + 0.674 * sigma})
+    return out
+
+
+def store_track_record_backtests(models: dict, model_version: str = MODEL_VERSION) -> list[dict]:
+    """Persist the replayed walk-forward backtest of the poll-free model and of
+    every candidate system, under the identical protocol, and the comparison
+    table the dashboard reads."""
+    from uuid import uuid4
+
+    from .backtest import metrics as backtest_metrics
+    from .track_record import CANDIDATES, label
+
+    runs, comparison = [], {}
+    for chamber, model in models.items():
+        store.set_meta(f"national_sigma_{chamber}",
+                       str(round(model.backtest["national_error_sigma_pts"], 3)))
+        by_candidate: dict[str, list] = defaultdict(list)
+        for candidate, cycle, _seat, predicted, sigma, actual, win_p in model.backtest_rows:
+            by_candidate[candidate].append((predicted, sigma, actual, cycle, win_p))
+        for candidate in ["published"] + CANDIDATES:
+            scored = _scored_dicts(by_candidate.get(candidate, []))
+            if not scored:
                 continue
-            xs = [[r.x[i] for i in idx] for r in rows]
-            ys = [r.actual_margin for r in rows]
-            weights = ridge_fit(xs, ys)
-            residuals = [y - sum(w * v for w, v in zip(weights, x))
-                         for x, y in zip(xs, ys)]
-            by_chamber[chamber] = (weights, max(MIN_SIGMA, pstdev(residuals)))
-        for race_id, row in feature_rows.items():
-            if row.chamber not in by_chamber:
-                continue
-            if spec["polled_only"] and row.poll_count == 0:
-                continue  # a polls-only model has nothing to say without polls
-            weights, sigma = by_chamber[row.chamber]
-            mean = sum(w * row.x[i] for w, i in zip(weights, idx))
-            probability = min(.995, max(.005, normal_cdf(mean / sigma)))
-            alternatives.append({
-                "race_id": race_id, "as_of": as_of, "model_version": name,
-                "data_version": version,
-                "dem_probability": round(probability, 4),
-                "margin": round(mean, 2),
-                "low80": round(mean - 1.282 * sigma, 2), "high80": round(mean + 1.282 * sigma, 2),
-                "low95": round(mean - 1.960 * sigma, 2), "high95": round(mean + 1.960 * sigma, 2),
-                "rating": rating(probability), "quality": "-",
-                "components": json.dumps({"_model": name})})
-    store.insert_forecasts(alternatives)
+            summary = backtest_metrics(scored)
+            cycles = sorted({row["cycle"] for row in scored})
+            version = (model_version if candidate == "published"
+                       else f"{SYSTEM_BOARD_PREFIX}{candidate}")
+            by_cycle = {str(c): backtest_metrics([r for r in scored if r["cycle"] == c])
+                        for c in cycles}
+            run = {
+                "id": f"bt-{chamber}-{uuid4().hex[:10]}", "run_at": store.now(),
+                "model_version": version, "chamber": chamber,
+                "cycles": json.dumps(cycles), "n_races": summary["n_races"],
+                "brier": summary["brier"], "log_loss": summary["log_loss"],
+                "winner_accuracy": summary["winner_accuracy"],
+                "margin_mae": summary["margin_mae"], "margin_rmse": summary["margin_rmse"],
+                "coverage80": summary["coverage80"], "coverage95": summary["coverage95"],
+                "calibration": json.dumps(summary["calibration"]),
+                "by_cycle": json.dumps(by_cycle),
+                "config": json.dumps({
+                    "design": "walk-forward replay of the whole poll-free procedure: "
+                              "every system trained only on earlier cycles, the published "
+                              "system re-chosen and every race's uncertainty re-estimated "
+                              "from earlier cycles only",
+                    "system": "published (track-record choice)" if candidate == "published"
+                              else label(candidate),
+                    "chosen_system_by_cycle": model.backtest["chosen_system_by_cycle"],
+                    "track_record_metrics": (model.backtest["summary"] if candidate == "published"
+                                             else model.backtest["per_system"].get(candidate)),
+                    "subgroups": {"by_cycle_track_record": model.backtest["by_cycle"]}
+                                 if candidate == "published" else {},
+                    "national_error_sigma_pts": model.backtest["national_error_sigma_pts"],
+                    "polls_used": False}),
+            }
+            store.save_backtest_run(run)
+            if candidate == "published":
+                runs.append(run)
+            comparison.setdefault(chamber, {})[version] = {
+                "brier": summary["brier"], "log_loss": summary["log_loss"],
+                "winner_accuracy": summary["winner_accuracy"],
+                "margin_mae": summary["margin_mae"], "n_races": summary["n_races"]}
+    store.set_meta("model_comparison", json.dumps(
+        {"run_at": store.now(), "champion": model_version, "chambers": comparison,
+         "note": "Poll-free. Identical walk-forward replay for every row; "
+                 f"{SYSTEM_BOARD_PREFIX}* rows are the individual systems the "
+                 "published forecast chooses between by track record."}))
+    return runs
+
+
+def run_track_record_backtests() -> list[dict]:
+    """Fit the poll-free model on stored history and persist its backtests."""
+    from .track_record import Inputs, TrackRecordModel
+    inputs = Inputs(ResultLookup(store.all_results()))
+    models = {ch: TrackRecordModel(ch).fit(inputs, CYCLE) for ch in ("house", "senate")}
+    return store_track_record_backtests(models)
+
+
+def _expert_consensus(as_of: str) -> dict[str, dict]:
+    """Published handicapper consensus per seat -- DIAGNOSTIC ONLY. It is no
+    longer a forecast input (it is largely built on polls); it is kept so the
+    places where the poll-free model and the handicappers disagree are
+    published rather than hidden."""
+    try:
+        lookup = RatingLookup(store.all_race_ratings(as_of=as_of))
+    except Exception:  # pragma: no cover - a missing table must not block a forecast
+        return {}
+    out = {}
+    for seat_key in lookup.seats(CYCLE):
+        summary = lookup.consensus(CYCLE, seat_key, as_of)
+        if summary:
+            out[seat_key] = summary
+    return out
 
 
 def build_forecasts(as_of: str | None = None, prefix: str = "live",
                     with_backtests: bool = True, force: bool = False,
                     enforce_gates: bool = True,
                     min_rated_races: int = MIN_RATED_RACES) -> dict:
-    """Train on ingested history, freeze snapshots, store control simulations."""
+    """Train the poll-free track-record model on ingested history, freeze
+    snapshots, store backtests and control simulations.
+
+    ``min_rated_races`` is accepted for compatibility and ignored: expert
+    ratings are no longer a forecast input (research claim T-004)."""
+    from .campaign import victory_bands
+    from .track_record import (CANDIDATES, SYSTEMS, Inputs, TrackRecordModel,
+                               label, probability)
+
     as_of = as_of or store.now()
     fingerprint = store.data_fingerprint()
     if (prefix == "live" and not force
@@ -1008,222 +1190,178 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
                 "skipped": "no input or model change"}
     races = build_race_universe()
     results = ResultLookup(store.all_results())
-    poll_lookup = PollLookup(store.all_polls())
-    # Published expert ratings, filtered to those in existence at as_of. This
-    # is the current-cycle seat-level signal the forecast previously lacked
-    # for 427 of 470 races; app.features turns it into a model feature and the
-    # coefficient is fitted on historical cycles (research claim R-001).
-    rating_lookup = RatingLookup(store.all_race_ratings(as_of=as_of))
-    from .features import StateLean, RedrawAdjust
-    state_lean = StateLean(results)
-    redraw_adjust = RedrawAdjust(results)
+    inputs = Inputs(results)
+    missing = [ch for ch in ("house", "senate") if not inputs.history(ch)]
+    if missing:
+        raise RuntimeError(f"cannot train: no ingested historical results for {missing}; "
+                           "run ingestion first")
+    models = {ch: TrackRecordModel(ch).fit(inputs, CYCLE) for ch in ("house", "senate")}
 
-    training: list = []
-    for chamber in ("house", "senate"):
-        from .features import historical_rows
-        training.extend(historical_rows(
-            results, poll_lookup, chamber,
-            cycles=[c for c in results.cycles(chamber) if c < CYCLE],
-            state_lean=state_lean, rating_lookup=rating_lookup))
-    trained_chambers = {row.chamber for row in training}
-    if not {"house", "senate"} <= trained_chambers:
-        raise RuntimeError(
-            "cannot train: no ingested historical results for "
-            f"{sorted({'house', 'senate'} - trained_chambers)}; run ingestion first")
-    # Each chamber picks its own champion spec on held-out log loss (the
-    # mandate calls for different structures per chamber; this decides it on
-    # evidence). Fit one model per chamber on that chamber's training rows.
-    from .backtest import select_chamber_champions
-    champions = select_chamber_champions(results, poll_lookup, state_lean,
-                                         rating_lookup=rating_lookup)
-    models: dict[str, MarginModel] = {}
-    for chamber, choice in champions.items():
-        chamber_rows = [r for r in training if r.chamber == chamber]
-        models[chamber] = MarginModel(**choice["kwargs"]).fit(chamber_rows)
-
-    # Expert-consensus overlay, fitted per chamber under the same walk-forward
-    # protocol that picks the champion (research claim R-001). This is what
-    # lets published margins move on current-cycle evidence in the ~90% of
-    # races that carry no polling.
-    overlays = {chamber: RatingOverlay(chamber).fit(
-        [r for r in training if r.chamber == chamber]) for chamber in ("house", "senate")}
-
-    # Seats with ingested campaign-finance rows for this cycle: a real input to
-    # the published data grade instead of a hardcoded False.
-    finance_rows = store.all_finance_snapshots(CYCLE, as_of)
-    profile_rows = store.all_candidate_profiles(CYCLE, as_of)
-    event_rows = store.all_campaign_events(CYCLE, as_of)
-    by_finance, by_profile, by_event = defaultdict(list), defaultdict(list), defaultdict(list)
-    for item in finance_rows:
-        by_finance[item["seat_key"]].append(item)
-    for item in profile_rows:
-        by_profile[item["seat_key"]].append(item)
-    for item in event_rows:
-        by_event[item["seat_key"]].append(item)
-    financed_seats = {row["seat_key"] for row in finance_rows}
-    financed_seats.update(row["seat_key"] for row in store.all_finance(CYCLE))
     version = data_version(fingerprint, prefix)
-    snapshots = []
-    feature_meta = {}
-    feature_rows = {}
     previous_by_race = {item["race_id"]: item for item in
                         store.latest_forecasts(model_version=MODEL_VERSION)}
-    # The outgoing champion's published numbers, resolved from the data before
-    # this run's snapshots are written. The release gate compares against these
-    # so a version bump that changes nothing in production cannot be published.
     outgoing_version = store.latest_champion_version()
     outgoing_by_race = ({item["race_id"]: item for item in store.latest_forecasts()}
                         if outgoing_version and outgoing_version != MODEL_VERSION
                         else {})
+    consensus = _expert_consensus(as_of)
 
-    # Pass 1: the model's own prediction for every race. The overlay's level
-    # term is the model's mean across this cycle's rated seats, so every base
-    # prediction has to exist before any of them can be adjusted.
-    base_predictions: dict[str, Prediction] = {}
+    snapshots, board, feature_meta = [], [], {}
     for race in races:
-        row = build_row(race["seat_key"], CYCLE, race["chamber"], race["state"],
-                        race["district"], results, poll_lookup, as_of,
-                        holder_party=race["incumbent_party"], state_lean=state_lean,
-                        redraw_adjust=redraw_adjust, rating_lookup=rating_lookup)
-        feature_rows[race["id"]] = row
-        base_predictions[race["id"]] = models[race["chamber"]].predict(row)
-    overlay_context = {}
-    for chamber, overlay in overlays.items():
-        rated = [(base_predictions[race["id"]].mean,
-                  consensus_of(feature_rows[race["id"]]))
-                 for race in races if race["chamber"] == chamber
-                 and consensus_of(feature_rows[race["id"]]) is not None]
-        overlay_context[chamber] = overlay.cycle_context(
-            [mean for mean, _ in rated], [c for _, c in rated])
-
-    # Pass 2: expert overlay, then the campaign layer, then freeze.
-    for race in races:
-        row = feature_rows[race["id"]]
-        poll_age_days = _poll_age_days(row.last_poll_date, as_of)
-        rating_summary = row.detail.get("ratings")
-        payload = models[race["chamber"]].forecast_payload(
-            row, race["id"], finance_fresh=race["seat_key"] in financed_seats,
-            poll_age_days=poll_age_days,
-            rating_points=rating_evidence_points(rating_summary))
-        model_prediction = base_predictions[race["id"]]
-        components = json.loads(payload["components"])
-        overlay = overlays[race["chamber"]]
-        prediction, overlay_detail = overlay.apply(
-            model_prediction, consensus_of(row), overlay_context[race["chamber"]],
-            polled=row.poll_count > 0, summary=rating_summary,
-            redrawn=bool(row.detail.get("redrawn")))
-        finance = finance_context(by_finance.get(race["seat_key"], []), as_of,
-                                  ELECTION_DATE, chamber=race["chamber"])
-        party_by_candidate = {
-            str(item.get("candidate_id")): str(item.get("party"))
-            for item in finance.get("candidates", []) if item.get("party") in {"D", "R"}
-        }
-        party_by_candidate.update({
-            str(item.get("candidate_id")): str(item.get("party"))
-            for item in by_profile.get(race["seat_key"], [])
-            if item.get("party") in {"D", "R"}
-        })
-        candidates = candidate_context(by_profile.get(race["seat_key"], []),
-                                       party_by_candidate=party_by_candidate)
-        events = event_context(by_event.get(race["seat_key"], []),
-                               party_by_candidate=party_by_candidate, as_of=as_of,
-                               last_poll_date=row.last_poll_date)
-        # The campaign layer sits on top of the overlay: its competitiveness
-        # damping should read the margin the forecast actually publishes, not
-        # a pre-overlay one it no longer believes.
-        campaign = campaign_adjustment(
-            prediction.mean, finance, candidates, events,
-            poll_count=row.poll_count, poll_age_days=poll_age_days)
-        final_mean = prediction.mean + campaign["margin_adjustment"]
-        final_sigma = sqrt(prediction.sigma ** 2 + campaign["added_sigma"] ** 2)
-        final_prediction = Prediction(
-            final_mean, final_sigma, prediction.model,
-            calibration=prediction.calibration,
-            calibration_weight=prediction.calibration_weight)
-        low80, high80 = final_prediction.interval(1.282)
-        low95, high95 = final_prediction.interval(1.960)
-        payload.update({
-            "dem_probability": round(final_prediction.dem_probability, 4),
-            "margin": round(final_mean, 2),
-            "low80": round(low80, 2), "high80": round(high80, 2),
-            "low95": round(low95, 2), "high95": round(high95, 2),
-            "rating": rating(final_prediction.dem_probability),
-        })
-        components["expert_rating_adjustment"] = overlay_detail.get("margin_shift", 0.0)
-        components["campaign_adjustment"] = campaign["margin_adjustment"]
+        chamber = race["chamber"]
+        model = models[chamber]
+        row = inputs.row(chamber, CYCLE, race["seat_key"], race["state"], race["district"],
+                         holder_party=race["incumbent_party"])
+        out = model.predict(row)
+        mean, sigma, p = out["mean"], out["sigma"], out["probability"]
+        system = out["system"]
+        every = {}
+        for candidate in CANDIDATES:
+            c_sigma = model.uncertainty[candidate].local(CYCLE, row.seat_key, row.state)["sigma"]
+            c_mean = out["systems"][candidate]
+            # Same odds calibration as the published number, so the board's
+            # rows are comparable with it (and identical for the published one).
+            c_p = probability(c_mean, c_sigma, model.calibration)
+            every[candidate] = {"label": label(candidate), "margin": round(c_mean, 2),
+                                "dem_probability": round(c_p, 4)}
+            board.append({
+                "race_id": race["id"], "as_of": as_of,
+                "model_version": f"{SYSTEM_BOARD_PREFIX}{candidate}",
+                "data_version": version,
+                "dem_probability": round(c_p, 4),
+                "margin": round(c_mean, 2),
+                "low80": round(c_mean - 1.282 * c_sigma, 2),
+                "high80": round(c_mean + 1.282 * c_sigma, 2),
+                "low95": round(c_mean - 1.960 * c_sigma, 2),
+                "high95": round(c_mean + 1.960 * c_sigma, 2),
+                "rating": rating(c_p), "quality": "-",
+                "components": json.dumps({"_model": candidate})})
         previous = previous_by_race.get(race["id"])
-        components["_analysis"] = forecast_analysis(
-            model_prediction.mean, final_mean, final_sigma,
-            final_prediction.dem_probability, components, finance, candidates,
-            events, campaign, previous, expert_ratings=rating_summary,
-            expert_overlay=overlay_detail)
-        payload["components"] = json.dumps(components)
-        payload.update({"as_of": as_of, "model_version": MODEL_VERSION,
-                        "data_version": version})
+        change = None
+        if previous:
+            change = {"margin_points": round(mean - float(previous.get("margin") or 0.0), 2),
+                      "dem_probability_points": round(
+                          100 * (p - float(previous.get("dem_probability") or 0.0)), 2)}
+        fallback = system != model.system
+        expert = consensus.get(race["seat_key"])
+        components = {group: round(value, 3) for group, value in out["contributions"].items()
+                      if abs(value) >= 0.0005}
+        components["_model"] = f"track-record:{system}"
+        components["_analysis"] = {
+            "method": "poll-free track record",
+            "system": system, "system_label": label(system),
+            "system_about": (SYSTEMS[system]["about"] if system in SYSTEMS
+                             else "the plain average of all five systems"),
+            "why_this_system": (
+                f"{label(system)} is used because {label(model.system)} -- the "
+                f"system with the best {chamber} close-race record -- needs an "
+                "input this race does not have" if fallback else
+                f"it has the best record on past {chamber} close races "
+                "(out-of-sample, 2010 onward); re-chosen on every run"),
+            "chamber_ranking": [{"system": c, **model.scoreboard[c]} for c in model.ranking],
+            "inputs": {
+                "presidential_lean_pvi": row.pvi, "state_house_lean": (
+                    round(row.lean, 2) if row.lean is not None else None),
+                "same_map_prior_margin": (round(row.prior, 2) if row.prior is not None else None),
+                "same_map_prior_cycle": row.prior_cycle,
+                "incumbent_running": (None if row.inc is None else
+                                      {1.0: "D", -1.0: "R"}.get(row.inc, "open")),
+                "redrawn_for_2026": row.redrawn},
+            "every_system": every,
+            "track_record_here": out["seat_record"],
+            "track_record_here_summary": {
+                "elections": len(out["seat_record"]),
+                "called_correctly": sum(1 for e in out["seat_record"] if e["called_correctly"])},
+            "uncertainty": out["uncertainty"],
+            "victory_bands": victory_bands(mean, sigma, p),
+            "change_since_previous": change,
+            "expert_consensus_for_reference": (
+                {"consensus": expert["consensus"], "n_raters": expert["n_raters"],
+                 "newest_rating_date": expert["newest_rating_date"],
+                 "used": False} if expert else None),
+        }
+        payload = {
+            "race_id": race["id"], "dem_probability": round(p, 4), "margin": round(mean, 2),
+            "low80": round(mean - 1.282 * sigma, 2), "high80": round(mean + 1.282 * sigma, 2),
+            "low95": round(mean - 1.960 * sigma, 2), "high95": round(mean + 1.960 * sigma, 2),
+            "rating": rating(p), "quality": out["grade"],
+            "components": json.dumps(components),
+            "as_of": as_of, "model_version": MODEL_VERSION, "data_version": version}
         snapshots.append(payload)
-        feature_meta[race["id"]] = {"has_prior": row.has_prior,
-                                    "poll_count": row.poll_count,
-                                    "rated": bool(rating_summary),
-                                    "chamber": race["chamber"],
-                                    "consensus_safe": is_unanimously_safe(rating_summary),
-                                    "model_margin": round(model_prediction.mean, 2),
-                                    "published_margin": round(final_mean, 2),
-                                    "redrawn": bool(row.detail.get("redrawn")),
-                                    "consensus": (rating_summary or {}).get("consensus"),
-                                    "quality": payload["quality"],
-                                    "rating": payload["rating"],
-                                    "dem_probability": payload["dem_probability"]}
+        feature_meta[race["id"]] = {
+            "chamber": chamber, "pvi": row.pvi is not None,
+            "prior": row.prior is not None, "ballot": row.inc is not None,
+            "open": row.inc == 0, "redrawn": row.redrawn, "system": system,
+            "margin": round(mean, 2), "rating": payload["rating"],
+            "consensus": expert["consensus"] if expert else None,
+            "consensus_safe": is_unanimously_safe(expert)}
 
-    # Release gates run BEFORE anything is frozen: a failure leaves the
-    # previous forecast standing instead of publishing one that cannot back
-    # its own claims. See app.gates.
-    race_seats = {race["seat_key"] for race in races}
-    gate_coverage = {"with_expert_ratings":
-                     sum(1 for m in feature_meta.values() if m["rated"])}
+    coverage = {
+        "races": len(races),
+        "with_pvi": sum(1 for m in feature_meta.values() if m["pvi"]),
+        "with_same_map_result": sum(1 for m in feature_meta.values() if m["prior"]),
+        "with_ballot_status": sum(1 for m in feature_meta.values() if m["ballot"]),
+        "open_seats": sum(1 for m in feature_meta.values() if m["open"]),
+        "redrawn_seats": sum(1 for m in feature_meta.values() if m["redrawn"]),
+        "with_polls": 0, "polls_used": False,
+        "competitive_races": len(gates.competitive_races(snapshots)),
+    }
+    coverage["competitive_races_grade_a_or_b"] = sum(
+        1 for p in gates.competitive_races(snapshots) if p.get("quality") in gates.REQUIRED_GRADES)
     gate_results = []
     if enforce_gates:
         gate_results = [
-            gates.check_current_cycle_ratings(gate_coverage,
-                                              minimum=min_rated_races),
-            gates.check_competitive_data_grade(snapshots),
-            gates.check_model_moved(snapshots, outgoing_by_race,
-                                    MODEL_VERSION, outgoing_version),
+            gates.check_poll_free_inputs(coverage),
+            gates.check_competitive_data_grade(snapshots, required=POLL_FREE_REQUIRED_GRADES),
+            gates.check_model_moved(snapshots, outgoing_by_race, MODEL_VERSION, outgoing_version),
         ]
     inserted = store.insert_forecasts(snapshots)
-    _store_alternative_model_snapshots(training, feature_rows, as_of, version)
+    store.insert_forecasts(board)
 
-    champion_desc = "; ".join(f"{ch}: {choice['name']}" for ch, choice in champions.items())
-    store.set_meta("chamber_champions", json.dumps(
-        {ch: {"spec": choice["name"], "kwargs": choice["kwargs"],
-              "log_loss_scoreboard": choice["scoreboard"]}
-         for ch, choice in champions.items()}))
+    track_record_meta = {
+        chamber: {"published_system": model.system, "label": label(model.system),
+                  "ranking": [{"system": c, **model.scoreboard[c]} for c in model.ranking],
+                  "backtest": {k: model.backtest[k] for k in
+                               ("cycles", "chosen_system_by_cycle", "summary", "by_cycle",
+                                "national_error_sigma_pts", "calibration", "per_system")}}
+        for chamber, model in models.items()}
+    store.set_meta("track_record", json.dumps(track_record_meta))
     store.upsert_model_version({
         "id": MODEL_VERSION, "chamber": "both", "status": "champion",
         "created_at": store.now(),
-        "description": "Per-chamber ridge regression on vintage-safe "
-                       f"fundamentals (state lean, seat history, environment) + "
-                       f"time-decayed polling, then a walk-forward-fitted expert "
-                       f"race-ratings overlay, then a bounded stage-aware campaign "
-                       f"capacity/candidate/event overlay. "
-                       f"Chamber champions -> {champion_desc}",
-        "coefficients": json.dumps({ch: json.loads(m.to_json()) for ch, m in models.items()})})
+        "description": "Poll-free track-record model: five systems built only from "
+                       "certified results, presidential partisanship (Cook PVI), "
+                       "incumbency and the national midterm pattern, each run "
+                       "walk-forward; each chamber publishes the system with the best "
+                       "out-of-sample close-race record, and every race's uncertainty "
+                       "combines a national term with its own seat/state track record. "
+                       + "; ".join(f"{ch}: {label(m.system)}" for ch, m in models.items()),
+        "coefficients": json.dumps({
+            ch: {name: dict(zip(system.names, [round(w, 4) for w in system.weights]))
+                 for name, system in m.systems.items()} for ch, m in models.items()})})
     store.seed_research_claims(RESEARCH_CLAIMS)
     store.seed_research_evidence(RESEARCH_EVIDENCE)
-    # Backtests run before the control simulation: they compute the
-    # empirical national-shock size (see backtest.national_error_sigma) that
-    # the simulation needs to avoid false aggregate certainty from averaging
-    # away correlated seat-level errors.
-    backtests = run_backtests(MODEL_VERSION) if with_backtests else []
+    if with_backtests:
+        backtests = store_track_record_backtests(models)
+    else:
+        backtests = []
+        for chamber, model in models.items():
+            store.set_meta(f"national_sigma_{chamber}",
+                           str(round(model.backtest["national_error_sigma_pts"], 3)))
 
     control = {}
     for chamber, base in (("house", 0), ("senate", int(store.get_meta("senate_dem_seats_not_up") or 0))):
-        # Simulate from the champion's persisted snapshots, so snapshots and
-        # control numbers can never disagree (snapshots are immutable: a
-        # same-day rerun keeps the first frozen set).
         stored = store.latest_forecasts(chamber, model_version=MODEL_VERSION)
         nat_sigma = store.get_meta(f"national_sigma_{chamber}")
         kwargs = {"national_sigma": float(nat_sigma)} if nat_sigma else {}
-        control[chamber] = simulate_control(stored, chamber, base_dem_seats=base, **kwargs)
+        # Headline rule (T-003) re-tested on the poll-free model's replay,
+        # 2014-2024: the Senate's simulated total still beats counting
+        # favorites (seat MAE 1.68 vs 2.33, better in 5 of 6 cycles); in the
+        # House the probability total's lower MAE (12.6 vs 14.0) comes from
+        # the 2018 wave alone -- it is worse in 4 of 6 cycles -- so the House
+        # keeps the count of favored races, which also equals the race list.
+        control[chamber] = simulate_control(stored, chamber, base_dem_seats=base,
+                                            tie_break_party=SENATE_TIE_BREAK_PARTY, **kwargs)
         store.save_control_snapshot(stored[0]["as_of"], chamber, MODEL_VERSION,
                                     stored[0]["data_version"], control[chamber])
 
@@ -1231,73 +1369,37 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     store.set_meta("last_data_version", version)
     store.set_meta("last_input_fingerprint", fingerprint)
     store.set_meta("last_model_version", MODEL_VERSION)
-    # Coverage counts RACES IN THIS FORECAST, intersected with the seats each
-    # source actually covers. Counting the source's own key set instead
-    # reported 500 financed and 489 profiled seats against a 470-race
-    # universe -- FEC and the profile feed both carry seats that are not up in
-    # 2026 -- which made coverage unreadable as a percentage.
-    coverage = {
-        "races": len(races),
-        "with_prior_result": sum(1 for m in feature_meta.values() if m["has_prior"]),
-        "with_polls": sum(1 for m in feature_meta.values() if m["poll_count"] > 0),
-        "with_expert_ratings": gate_coverage["with_expert_ratings"],
-        "with_finance_vintages": len(financed_seats & race_seats),
-        "with_candidate_profiles": len(set(by_profile) & race_seats),
-        "with_campaign_events": len(set(by_event) & race_seats),
-    }
-    # Races the model calls competitive that every rater calls safe. Not
-    # silently split down the middle (the overlay's slope is not fitted for
-    # that range, see app.ratings.overlay_consensus) and not silently hidden
-    # either: published as a named disagreement so it can be argued with.
-    # The model and the handicappers pointing at DIFFERENT PARTIES on the same
-    # seat is not a close call -- it means one of the model's inputs is wrong
-    # for that seat. It is how the missing Tennessee and Alabama redraws were
-    # found (TN-09 read D+57 from Steve Cohen's pre-split prior while all ten
-    # raters called it Republican), so the run reports it rather than leaving
-    # it to be noticed on the site.
+    # Where the poll-free model and the handicappers point at different
+    # parties. Published, never silently reconciled: the ratings are not an
+    # input any more, so these are genuine disagreements to argue with.
     sign_conflicts = sorted(
-        ({"race_id": race_id,
-          "model_margin": meta["model_margin"],
-          "consensus": meta["consensus"],
-          "published_margin": meta["published_margin"],
-          "redrawn": meta["redrawn"],
-          # Whether the published margin ended up agreeing with the raters.
-          # An UNCORRECTED conflict is the one that needs a human: it means
-          # neither the model nor the overlay could reconcile the seat.
-          "corrected": (meta["published_margin"] > 0) == (meta["consensus"] > 0)}
+        ({"race_id": race_id, "model_margin": meta["margin"], "consensus": meta["consensus"]}
          for race_id, meta in feature_meta.items()
-         if meta.get("consensus") is not None and meta["model_margin"] is not None
-         and (meta["model_margin"] > 0) != (meta["consensus"] > 0)
-         and abs(meta["model_margin"]) >= 5.0 and abs(meta["consensus"]) >= 1.0),
+         if meta["consensus"] is not None and abs(meta["margin"]) >= 5.0
+         and abs(meta["consensus"]) >= 1.0 and (meta["margin"] > 0) != (meta["consensus"] > 0)),
         key=lambda item: -abs(item["model_margin"]))
     consensus_safe_conflicts = sorted(
         race_id for race_id, meta in feature_meta.items()
-        if meta.get("consensus_safe") and meta.get("chamber") == "house"
-        and meta["rating"] in gates.COMPETITIVE_RATINGS)
-    coverage["competitive_but_consensus_safe"] = len(consensus_safe_conflicts)
+        if meta.get("consensus_safe") and meta["rating"] in gates.COMPETITIVE_RATINGS)
+    coverage["with_expert_ratings_for_reference"] = sum(
+        1 for m in feature_meta.values() if m["consensus"] is not None)
     coverage["model_vs_consensus_sign_conflicts"] = len(sign_conflicts)
-    coverage["model_vs_consensus_sign_conflicts_uncorrected"] = sum(
-        1 for c in sign_conflicts if not c["corrected"])
-    coverage["competitive_races"] = len(gates.competitive_races(snapshots))
-    coverage["competitive_races_grade_a_or_b"] = sum(
-        1 for p in gates.competitive_races(snapshots)
-        if p.get("quality") in gates.REQUIRED_GRADES)
+    coverage["competitive_but_consensus_safe"] = len(consensus_safe_conflicts)
     store.set_meta("coverage", json.dumps(coverage))
-    store.set_meta("expert_rating_overlay", json.dumps(
-        {chamber: overlay.to_json() for chamber, overlay in overlays.items()}))
-    store.set_meta("competitive_but_consensus_safe",
-                   json.dumps(consensus_safe_conflicts))
-    store.set_meta("model_vs_consensus_sign_conflicts",
-                   json.dumps(sign_conflicts[:25]))
+    store.set_meta("expert_rating_overlay", json.dumps(None))
+    store.set_meta("competitive_but_consensus_safe", json.dumps(consensus_safe_conflicts))
+    store.set_meta("model_vs_consensus_sign_conflicts", json.dumps(sign_conflicts[:25]))
     store.set_meta("release_gates", json.dumps(
         {"run_at": store.now(), "model_version": MODEL_VERSION,
          "enforced": enforce_gates, "results": gate_results}))
     return {"as_of": as_of, "data_version": version, "races": len(races),
             "snapshots_inserted": inserted, "coverage": coverage,
-            "expert_rating_overlay": {c: o.to_json() for c, o in overlays.items()},
-            "competitive_but_consensus_safe": consensus_safe_conflicts,
+            "track_record": {ch: {"published_system": m.system,
+                                  "backtest_summary": m.backtest["summary"]}
+                             for ch, m in models.items()},
             "model_vs_consensus_sign_conflicts": sign_conflicts[:25],
             "release_gates": gate_results,
-            "control": {k: {"democratic_control_probability": v["democratic_control_probability"]}
+            "control": {k: {"democratic_control_probability": v["democratic_control_probability"],
+                            "headline_democratic_seats": v.get("headline_democratic_seats")}
                         for k, v in control.items()},
             "backtests": [r["id"] for r in backtests]}

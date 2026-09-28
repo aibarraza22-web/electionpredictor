@@ -235,8 +235,11 @@ footer a{color:var(--ink2)}
 <div class="wrap">
 <main id="main">
   <div class="lede">
-    <p>Every U.S. House and Senate race, with calibrated uncertainty, full source
-    provenance, and accuracy measured by stored walk-forward backtests.</p>
+    <p>Every 2026 U.S. House and Senate race, forecast <b>without polls</b>: only
+    certified past results, how each place votes for President, who is on the
+    ballot, and the midterm pattern. Each chamber uses whichever system has the
+    best record on past close races, and every race shows how that system has
+    done there before.</p>
   </div>
   <div id="banner" class="meta" role="status" aria-live="polite">Loading forecast…</div>
 
@@ -251,7 +254,7 @@ footer a{color:var(--ink2)}
 
   <section id="bgSec" hidden aria-labelledby="bgH">
     <div class="shead"><h2 id="bgH">Battlegrounds</h2>
-      <p>Closest races by win probability among those with seat-level evidence — derived from the model, not hand-picked.</p></div>
+      <p>Closest races by win probability among those with seat-level evidence — derived from the model, not hand-picked. Select one for its track record.</p></div>
     <p id="triage" class="small" style="color:var(--ink2);margin:0 0 .8rem"></p>
     <div id="battle" class="chips"></div>
   </section>
@@ -288,10 +291,15 @@ footer a{color:var(--ink2)}
     <div class="shead"><h2 id="modelH">Model report card</h2>
       <p>Every number here was computed by a stored expanding-window backtest — none is typed in.</p></div>
     <div class="grid g2" id="btCards"></div>
+    <div class="card" style="margin-top:1rem" id="chooserCard" hidden>
+      <h3>How the system was chosen <span class="muted small" style="font-weight:400">— every system replayed on past elections it had never seen; each chamber publishes the one with the best record on close races</span></h3>
+      <div class="grid g2" id="chooser"></div>
+    </div>
     <div class="card" style="margin-top:1rem">
-      <h3>Champion vs baselines <span class="muted small" style="font-weight:400">— identical walk-forward protocol; lower Brier and log loss are better</span></h3>
+      <h3>Published model vs each system <span class="muted small" style="font-weight:400">— identical walk-forward replay; lower Brier and log loss are better</span></h3>
       <div class="tablewrap"><table id="cmpTable"><thead></thead><tbody></tbody></table></div>
       <p class="small muted" id="cmpNote" style="margin:.6rem 0 0"></p>
+      <p class="small muted" style="margin:.35rem 0 0">"Published" replays the whole procedure exactly as it would have run at the time — including 2012–2014, when the system and the odds calibration had to be chosen from one or two cycles of history — so it can score below the single system that, in hindsight, is best. The system rows use raw, uncalibrated odds.</p>
     </div>
   </section>
 </main>
@@ -444,37 +452,63 @@ async function openDetail(id){
       <div class="tile"><div class="lbl">Projected margin</div><div class="big mono" style="font-size:1.35rem">${sgn(f.margin)}</div><div class="det">80%: ${sgn(f.low80)} … ${sgn(f.high80)}<br>95%: ${sgn(f.low95)} … ${sgn(f.high95)}</div></div>
       <div class="tile"><div class="lbl">Rating / data grade</div><div style="padding-top:.4rem"><span class="rt ${RT[f.rating]||"TU"}">${esc(f.rating)}</span> <span class="grade ${esc(f.quality)}">${esc(f.quality)}</span></div></div>
     </div>
-    <div id="dComp"></div><div id="dModels" style="margin-top:1rem"></div>
-    <div id="dPolls" class="small" style="margin-top:.8rem">Loading polls…</div><div id="dHist" class="small muted" style="margin-top:.5rem"></div>`;
+    <div id="dComp"></div>
+    <div id="dHist" class="small muted" style="margin-top:.8rem"></div>`;
   $("#dClose").addEventListener("click",closeDetail);
   d.focus();
   const comp=JSON.parse(f.components||"{}"), tier=comp._model, analysis=comp._analysis||{};
   delete comp._model; delete comp._analysis;
   const entries=Object.entries(comp).filter(([,v])=>typeof v==="number"); const mx=Math.max(...entries.map(([,v])=>Math.abs(v)),1);
-  $("#dComp").innerHTML=`<h3>Why this forecast <span class="muted small" style="font-weight:400">— additive margin components in points, ${tier==="full"?"polls + fundamentals tier":"fundamentals tier (no polls yet for this race)"}</span></h3>`+
+  const sysLabel=analysis.system_label||String(tier||"").replace("track-record:","");
+  $("#dComp").innerHTML=`<h3>Why this forecast <span class="muted small" style="font-weight:400">— additive margin components in points · ${esc(sysLabel)} · no polls</span></h3>`+
     entries.map(([k,v])=>{
       const w=Math.abs(v)/mx*50;
       const left=v<0? (50-w):50;
       return `<div class="comp"><span>${esc(k)}</span><span class="bar"><i style="left:${left}%;width:${w}%;background:${v>=0?"var(--dem)":"var(--rep)"}"></i><b style="position:absolute;left:50%;top:0;bottom:0;width:1.5px;background:var(--ink3)"></b></span><span class="mono" style="text-align:right">${v>=0?"D+":"R+"}${Math.abs(v).toFixed(2)}</span></div>`;
-    }).join("")+campaignAnalysis(analysis);
+    }).join("")+(analysis.method==="poll-free track record"?trackRecordAnalysis(analysis,r):campaignAnalysis(analysis));
   try{
-    const mm=await j(`/api/races/${id}/models`);
-    if(mm.models.length>1){
-      $("#dModels").innerHTML=`<h3>Model comparison <span class="muted small" style="font-weight:400">— what each method says; the champion drives the official forecast</span></h3>
-      <div class="tablewrap"><table><thead><tr><th scope="col">Model</th><th scope="col">Dem win</th><th scope="col">Margin</th><th scope="col">80% interval</th><th scope="col">Rating</th></tr></thead><tbody>`+
-      mm.models.map(x=>`<tr><td>${x.model_version===mm.champion?`<b>${esc(x.model_version)} (champion)</b>`:esc(x.model_version)}</td>
-        <td class="mono">${pct(x.dem_probability)}</td><td class="mono">${sgn(x.margin)}</td>
-        <td class="mono muted">${sgn(x.low80)} … ${sgn(x.high80)}</td>
-        <td><span class="rt ${RT[x.rating]||"TU"}">${esc(x.rating)}</span></td></tr>`).join("")+`</tbody></table></div>`;
-    }
-  }catch(e){}
-  try{
-    const [polls,hist]=await Promise.all([j(`/api/races/${id}/polls`), j(`/api/races/${id}/history`)]);
-    $("#dPolls").innerHTML= polls.polls.length
-      ? `<b>${polls.polls.length} ingested polls.</b> Latest: `+polls.polls.slice(-3).reverse().map(p=>`${esc(p.pollster)} ${esc(p.poll_date)}: <span class="mono">${sgn(p.dem_margin)}</span>`).join(" · ")
-      : `<span class="muted">${esc(polls.note||"No polls ingested for this race — the model widens uncertainty instead of assuming a tie.")}</span>`;
+    const hist=await j(`/api/races/${id}/history`);
     $("#dHist").textContent="Frozen snapshots: "+hist.map(h=>`${h.as_of} (${(h.dem_probability*100).toFixed(1)}%)`).join(" → ");
-  }catch(e){ $("#dPolls").textContent=""; }
+  }catch(e){}
+}
+
+// Poll-free race analysis: the system's record in this seat/state, what every
+// system says, the inputs, and how the uncertainty is built.
+function trackRecordAnalysis(a,r){
+  const rec=a.track_record_here||[], sum=a.track_record_here_summary||{}, inp=a.inputs||{}, u=a.uncertainty||{};
+  const area=r.chamber==="house"?"this district (same lines)":"this state's Senate races";
+  const recRows=rec.length?rec.map(e=>`<tr><td class="mono">${e.cycle}${r.chamber==="senate"&&e.seat_key&&e.seat_key.endsWith("-special")?" (special)":""}</td>
+      <td class="mono">${sgn(e.predicted_margin)}</td><td class="mono">${sgn(e.actual_margin)}</td>
+      <td>${e.called_correctly?'<span class="dem">✓ correct</span>':'<span class="rep">✗ missed</span>'}</td></tr>`).join("")
+    :`<tr><td colspan="4" class="muted">No past elections on these lines${inp.redrawn_for_2026?" — this district was redrawn for 2026":""}; its uncertainty falls back to the state and chamber record.</td></tr>`;
+  const ranking=(a.chamber_ranking||[]), rankOf={}; ranking.forEach((x,i)=>rankOf[x.system]=x);
+  const every=Object.entries(a.every_system||{}).sort((x,y)=>(rankOf[y[0]]?.close_race_accuracy||0)-(rankOf[x[0]]?.close_race_accuracy||0));
+  const inc=inp.incumbent_running==null?"unknown":inp.incumbent_running==="open"?"open seat":`${inp.incumbent_running} incumbent running`;
+  const lean=inp.presidential_lean_pvi==null?"—":(inp.presidential_lean_pvi===0?"EVEN":(inp.presidential_lean_pvi>0?"D+":"R+")+Math.abs(inp.presidential_lean_pvi));
+  const v=a.victory_bands||{}, ex=a.expert_consensus_for_reference;
+  return `<h3 style="margin-top:1rem">Track record here <span class="muted small" style="font-weight:400">— how ${esc(a.system_label)} did in ${area}, each prediction made before that election</span></h3>
+    <p class="small" style="margin:.2rem 0 .5rem">${sum.elections?`Called <b>${sum.called_correctly} of ${sum.elections}</b> past elections here correctly.`:"No usable history here."} ${esc(a.why_this_system?("Used because "+a.why_this_system+"."):"")}</p>
+    <div class="tablewrap"><table><thead><tr><th scope="col">Election</th><th scope="col">Predicted</th><th scope="col">Result</th><th scope="col">Call</th></tr></thead><tbody>${recRows}</tbody></table></div>
+    <h3 style="margin-top:1rem">What each system says <span class="muted small" style="font-weight:400">— ordered by record on past close races</span></h3>
+    <div class="tablewrap"><table><thead><tr><th scope="col">System</th><th scope="col">Close-race record</th><th scope="col">Margin</th><th scope="col">Dem win</th></tr></thead><tbody>`+
+    every.map(([k,x])=>`<tr><td>${k===a.system?`<b>${esc(x.label)} (published)</b>`:esc(x.label)}</td>
+      <td class="mono">${rankOf[k]&&rankOf[k].close_race_accuracy!=null?pct(rankOf[k].close_race_accuracy)+` <span class="muted">of ${rankOf[k].n_close_races}</span>`:"—"}</td>
+      <td class="mono">${sgn(x.margin)}</td><td class="mono">${pct(x.dem_probability)}</td></tr>`).join("")+`</tbody></table></div>
+    <div class="grid g4" style="margin-top:1rem">
+      <div class="tile"><div class="lbl">Presidential lean (PVI)</div><div class="big mono" style="font-size:1.12rem">${esc(lean)}</div><div class="det">current lines</div></div>
+      <div class="tile"><div class="lbl">Last result, same lines</div><div class="big mono" style="font-size:1.12rem">${inp.same_map_prior_margin==null?"—":sgn(inp.same_map_prior_margin)}</div><div class="det">${inp.same_map_prior_cycle||(inp.redrawn_for_2026?"redrawn for 2026":"none")}</div></div>
+      <div class="tile"><div class="lbl">On the ballot</div><div class="big" style="font-size:1.02rem;padding-top:.3rem">${esc(inc)}</div></div>
+      <div class="tile"><div class="lbl">Uncertainty (1 s.d.)</div><div class="big mono" style="font-size:1.12rem">±${(+u.sigma||0).toFixed(1)}</div><div class="det">national ±${(+u.national||0).toFixed(1)} · local ±${(+u.local||0).toFixed(1)}</div></div>
+    </div>
+    <div class="klist" style="margin-top:.7rem">
+      <div><span class="muted">D narrow (0–4)</span><b class="mono">${pct(v.dem_narrow_0_to_4||0)}</b></div>
+      <div><span class="muted">D by 4+</span><b class="mono">${pct(v.dem_by_at_least_4||0)}</b></div>
+      <div><span class="muted">D by 8+</span><b class="mono">${pct(v.dem_by_at_least_8||0)}</b></div>
+      <div><span class="muted">R narrow (0–4)</span><b class="mono">${pct(v.rep_narrow_0_to_4||0)}</b></div>
+      <div><span class="muted">R by 4+</span><b class="mono">${pct(v.rep_by_at_least_4||0)}</b></div>
+      <div><span class="muted">R by 8+</span><b class="mono">${pct(v.rep_by_at_least_8||0)}</b></div>
+    </div>
+    <p class="small muted" style="margin:.6rem 0 0">No polls or poll-based ratings are used.${ex?` For reference only, the published handicapper consensus is <span class="mono">${(+ex.consensus).toFixed(2)}</span> on a −4 (Safe R) to +4 (Safe D) scale from ${ex.n_raters} raters.`:""}</p>`;
 }
 
 function expertRatings(er,ov){
@@ -526,12 +560,16 @@ async function main(){
   const cov=h.coverage||{};
   const covBits=[];
   if(cov.races) covBits.push(`${cov.races} races`);
-  if(cov.with_expert_ratings!=null) covBits.push(`${cov.with_expert_ratings} with expert ratings`);
-  if(cov.with_polls!=null) covBits.push(`${cov.with_polls} with polls`);
+  if(cov.polls_used===false) covBits.push("no polls used");
+  if(cov.with_pvi!=null) covBits.push(`${cov.with_pvi} with current-lines presidential lean`);
+  if(cov.open_seats!=null) covBits.push(`${cov.open_seats} open seats`);
+  if(cov.redrawn_seats) covBits.push(`${cov.redrawn_seats} redrawn for 2026`);
+  if(cov.polls_used!==false&&cov.with_expert_ratings!=null) covBits.push(`${cov.with_expert_ratings} with expert ratings`);
+  if(cov.polls_used!==false&&cov.with_polls!=null) covBits.push(`${cov.with_polls} with polls`);
   if(cov.competitive_races!=null) covBits.push(`${cov.competitive_races_grade_a_or_b ?? "—"}/${cov.competitive_races} competitive races at grade A–B`);
   b.innerHTML= h.mode==="live"
     ? `Built from ingested primary sources as of <b>${esc(h.last_forecast_as_of)}</b> · data <span class="mono">${esc(h.data_version)}</span><br>
-       ${h.counts.election_results.toLocaleString()} results · ${h.counts.polls.toLocaleString()} polls${h.counts.race_ratings?` · ${h.counts.race_ratings.toLocaleString()} expert ratings`:""}${covBits.length?` · ${esc(covBits.join(" · "))}`:""}
+       ${h.counts.election_results.toLocaleString()} certified results${covBits.length?` · ${esc(covBits.join(" · "))}`:""}
        ${h.warnings.length?`<span class="warn">${esc(h.warnings.join(" "))}</span>`:""}`
     : `<b>Demo mode — synthetic data, not a live forecast.</b>${h.warnings.length?`<span class="warn">${esc(h.warnings.join(" "))}</span>`:""}`;
 
@@ -554,7 +592,7 @@ async function main(){
   $("#bgSec").hidden=false;
   const all=Object.values(FC);
   const competitive=all.filter(f=>["Toss-up","Lean Democratic","Lean Republican"].includes(f.rating)).length;
-  $("#triage").innerHTML=`<b>${competitive}</b> of ${all.length} races are competitive (Lean or Toss-up) — that is where research, polling and candidate attention pay off. The other <b>${all.length-competitive}</b> are rated Safe or Likely and need only monitoring.`;
+  $("#triage").innerHTML=`<b>${competitive}</b> of ${all.length} races are competitive (Lean or Toss-up) — the ones the historical record says could go either way. The other <b>${all.length-competitive}</b> are rated Safe or Likely.`;
   $("#battle").innerHTML=battle.map(({r,f})=>`<button class="chip" type="button" data-id="${r.id}">${esc(r.name||r.id)} <span class="p ${f.dem_probability>=.5?"dem":"rep"}">${pct(f.dem_probability)}</span></button>`).join("");
   $("#battle").addEventListener("click",e=>{const c=e.target.closest(".chip"); if(c) openDetail(c.dataset.id);});
 
@@ -601,6 +639,7 @@ async function main(){
     const champs=bt.runs.filter(r=>!String(r.model_version).startsWith("baseline")&&!String(r.model_version).startsWith("ablation")&&!String(r.model_version).startsWith("challenger"));
     const seen={}, latest=[];
     for(const r of champs){ if(!seen[r.chamber]){seen[r.chamber]=1; latest.push(r);} }
+    const SYS_LABEL={"challenger-persistence":"Seat history","challenger-pvi":"Presidential lean","challenger-pvi_inc":"Presidential lean + incumbency","challenger-core":"Last result + state lean","challenger-full":"Everything, one regression","challenger-ensemble":"Average of all five systems"};
     if(latest.length){
       $("#modelSec").hidden=false;
       $("#btCards").innerHTML=latest.map(r=>`<div class="card"><h3>${r.chamber} — held-out cycles ${r.cycles[0]}–${r.cycles[r.cycles.length-1]} <span class="muted small" style="font-weight:400">(${r.n_races} races)</span></h3>
@@ -613,6 +652,17 @@ async function main(){
           <div><span class="muted">95% coverage</span><b class="mono">${pct(r.coverage95)}</b></div>
         </div></div>`).join("");
     }
+    const trk=h.track_record;
+    if(trk){
+      $("#chooserCard").hidden=false;
+      $("#chooser").innerHTML=Object.entries(trk).map(([ch,t])=>{
+        const cal=(t.backtest||{}).calibration||{}, sm=(t.backtest||{}).summary||{};
+        return `<div><h3 style="font-size:1rem">${esc(ch.charAt(0).toUpperCase()+ch.slice(1))} → ${esc(t.label)}</h3>
+        <div class="tablewrap"><table><thead><tr><th scope="col">System</th><th scope="col">Close races called</th></tr></thead><tbody>`+
+        (t.ranking||[]).map((x,i)=>`<tr><td>${i===0?`<b>${esc(x.label)}</b>`:esc(x.label)}</td><td class="mono">${x.close_race_accuracy==null?"— <span class=\"muted\">no record yet</span>":pct(x.close_race_accuracy)+` <span class="muted">of ${x.n_close_races}</span>`}</td></tr>`).join("")+
+        `</tbody></table></div>
+        <p class="small muted" style="margin:.5rem 0 0">Replayed ${esc(((t.backtest||{}).cycles||[]).join(", "))}: ${pct(sm.winner_accuracy||0)} of all races and ${pct(sm.tossup_race_accuracy||0)} of races decided by under 10 points called correctly. Probability calibration ${cal.adopted?"adopted — it beat the raw odds in "+(cal.cycles_better||[]).length+" of "+(cal.cycles_judged||[]).length+" held-out cycles":"not adopted — it did not beat the raw odds in most held-out cycles"}.</p></div>`;}).join("");
+    }
     const cmp=await j("/api/models/comparison");
     const chambers=Object.keys(cmp.chambers);
     const models=[...new Set(chambers.flatMap(c=>Object.keys(cmp.chambers[c])))];
@@ -620,7 +670,7 @@ async function main(){
     $("#cmpTable thead").innerHTML="<tr><th scope='col'>Model</th>"+chambers.map(c=>`<th scope='col'>${c} Brier</th><th scope='col'>${c} log loss</th><th scope='col'>${c} acc.</th><th scope='col'>${c} MAE</th>`).join("")+"</tr>";
     $("#cmpTable tbody").innerHTML=models.map(m=>{
       const cells=chambers.map(c=>{const x=cmp.chambers[c][m]; return x?`<td class="mono">${fmt(x.brier)}</td><td class="mono">${fmt(x.log_loss)}</td><td class="mono">${pct(x.winner_accuracy)}</td><td class="mono">${fmt(x.margin_mae,2)}</td>`:"<td>—</td><td>—</td><td>—</td><td>—</td>";}).join("");
-      return `<tr><td>${m===cmp.champion?`<b>${esc(m)} (champion)</b>`:esc(m)}</td>${cells}</tr>`;}).join("");
+      return `<tr><td>${m===cmp.champion?`<b>Published (${esc(m)})</b>`:esc(SYS_LABEL[m]||m)}</td>${cells}</tr>`;}).join("");
     $("#cmpNote").textContent=cmp.note;
   }catch(e){ /* comparisons appear after the first pipeline run */ }
 }

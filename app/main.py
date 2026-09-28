@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from . import db, store
 from .dashboard import DASHBOARD_HTML
-from .forecast import MODEL_VERSION
+from .forecast import MODEL_VERSION, SENATE_TIE_BREAK_PARTY
 from .ratings import RatingLookup
 
 
@@ -99,6 +99,7 @@ def health_payload() -> dict:
                         "forecast is the previous version.")
     overlay_meta = store.get_meta("expert_rating_overlay")
     conflicts = store.get_meta("competitive_but_consensus_safe")
+    track_record = store.get_meta("track_record")
     return {
         "mode": mode,
         "database_backend": db.backend(),
@@ -110,6 +111,9 @@ def health_payload() -> dict:
         "release_gates": gates_payload,
         "expert_rating_overlay": json.loads(overlay_meta) if overlay_meta else None,
         "competitive_but_consensus_safe": json.loads(conflicts) if conflicts else [],
+        # Poll-free model: which system each chamber publishes and why (its
+        # out-of-sample close-race record), plus the replayed backtest.
+        "track_record": json.loads(track_record) if track_record else None,
         "last_forecast_as_of": store.get_meta("last_forecast_as_of"),
         "data_version": store.get_meta("last_data_version"),
         "warnings": warnings,
@@ -241,9 +245,9 @@ def race_campaign(race_id: str):
     analysis = components.get("_analysis") or {}
     return {"race_id": race_id, "as_of": snapshot["as_of"],
             "analysis": analysis,
-            "note": "Margins are published as model -> expert-ratings overlay -> "
-                    "bounded campaign adjustment, each layer attributed separately "
-                    "and each adding its own uncertainty."}
+            "note": "Poll-free forecast: the published system, every system's "
+                    "prediction, the inputs, and the system's out-of-sample record "
+                    "in this seat or state. Polls and expert ratings are not inputs."}
 
 
 @app.get("/api/models")
@@ -346,7 +350,8 @@ def scenario(s: Scenario):
             raise HTTPException(404, "No forecasts stored; run the forecast pipeline.")
         shifted = [{**f, "margin": f["margin"] + s.national_environment} for f in snapshots]
         base = int(store.get_meta(base_key) or 0) if base_key else 0
-        out[chamber] = simulate_control(shifted, chamber, simulations=2000, base_dem_seats=base)
+        out[chamber] = simulate_control(shifted, chamber, simulations=2000, base_dem_seats=base,
+                                        tie_break_party=SENATE_TIE_BREAK_PARTY)
     return out
 
 
@@ -377,7 +382,6 @@ def admin(action: str, reason: str = "operator request",
         from .forecast import build_forecasts
         summary["forecast"] = build_forecasts()
     if action == "backtest":
-        from .backtest import run_backtests
-        from .forecast import MODEL_VERSION
-        summary["backtests"] = [r["id"] for r in run_backtests(MODEL_VERSION)]
+        from .forecast import run_track_record_backtests
+        summary["backtests"] = [r["id"] for r in run_track_record_backtests()]
     return summary

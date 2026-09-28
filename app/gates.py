@@ -38,12 +38,17 @@ def competitive_races(payloads: list[dict]) -> list[dict]:
     return [p for p in payloads if p.get("rating") in COMPETITIVE_RATINGS]
 
 
-def check_competitive_data_grade(payloads: list[dict]) -> dict:
-    """Every competitive race must carry data grade A or B."""
+def check_competitive_data_grade(payloads: list[dict],
+                                 required: set[str] = REQUIRED_GRADES) -> dict:
+    """Every competitive race must carry one of the ``required`` data grades.
+
+    The poll-free model (app.track_record) grades evidence differently -- a
+    redrawn seat has current-lines partisanship and ballot status but, by
+    construction, no same-map history -- so it passes its own floor."""
     competitive = competitive_races(payloads)
     failing = sorted(
         ({"race_id": p["race_id"], "rating": p["rating"], "quality": p.get("quality")}
-         for p in competitive if p.get("quality") not in REQUIRED_GRADES),
+         for p in competitive if p.get("quality") not in required),
         key=lambda item: item["race_id"])
     result = {"gate": "competitive_data_grade", "competitive_races": len(competitive),
               "failing_races": len(failing), "examples": failing[:15],
@@ -52,11 +57,10 @@ def check_competitive_data_grade(payloads: list[dict]) -> dict:
         names = ", ".join(f"{f['race_id']} ({f['quality']})" for f in failing[:10])
         raise GateFailure(
             f"{len(failing)} of {len(competitive)} competitive races are below data "
-            f"grade B: {names}"
+            f"grade {max(required)}: {names}"
             f"{' ...' if len(failing) > 10 else ''}. A competitive race without "
             "seat-level evidence is a guess with a confidence interval attached; "
-            "ingest polling/ratings coverage for these seats or stop calling them "
-            "competitive.")
+            "ingest the missing seat-level inputs or stop calling them competitive.")
     return result
 
 
@@ -120,4 +124,29 @@ def check_current_cycle_ratings(coverage: dict, minimum: int) -> dict:
             f"only {rated} races carry expert ratings (minimum {minimum}); the "
             "race-ratings ingest did not deliver. Check the wikipedia-race-ratings "
             "adapter's reported failures before publishing.")
+    return result
+
+
+def check_poll_free_inputs(coverage: dict, min_ballot_share: float = 0.95) -> dict:
+    """The poll-free model's current-cycle inputs must have delivered.
+
+    Every race needs presidential partisanship on its CURRENT lines (without
+    it a redrawn seat has no baseline at all), and nearly every race needs a
+    known ballot status (incumbent running or open) -- the bundled 2026 files
+    going missing would otherwise publish a forecast that silently treats
+    every seat as open.
+    """
+    races = int(coverage.get("races") or 0)
+    with_pvi = int(coverage.get("with_pvi") or 0)
+    with_ballot = int(coverage.get("with_ballot_status") or 0)
+    result = {"gate": "poll_free_inputs", "races": races, "with_pvi": with_pvi,
+              "with_ballot_status": with_ballot,
+              "passed": races > 0 and with_pvi == races
+                        and with_ballot >= min_ballot_share * races}
+    if not result["passed"]:
+        raise GateFailure(
+            f"poll-free inputs incomplete: {with_pvi}/{races} races have current-lines "
+            f"PVI and {with_ballot}/{races} a known ballot status. Rebuild "
+            "data/vintage/cook_pvi_vintages.csv and data/vintage/incumbency_2026.csv "
+            "(app.ingest.cook_pvi / app.ingest.ballot_2026) before publishing.")
     return result

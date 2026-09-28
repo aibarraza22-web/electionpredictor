@@ -92,6 +92,37 @@ MIDDECADE_REMAP_CYCLE: dict[str, int] = {
 }
 
 
+# Full historical record of U.S. House map changes, used by the poll-free
+# model (app.track_record) to decide whether a district's past result
+# describes the SAME boundaries. Every state redraws after each census; the
+# mid-decade redraws below are the documented pre-2026 ones (first cycle on
+# the new map). Without them PA-13 entered 2018 carrying a "D+100" prior from
+# lines a court had already replaced with an R+22 district.
+CENSUS_MAP_CYCLES = (1982, 1992, 2002, 2012, 2022)
+HISTORICAL_MIDDECADE_REMAPS: dict[int, frozenset[str]] = {
+    2004: frozenset({"TX"}),              # 2003 Texas re-redistricting
+    2006: frozenset({"GA", "TX"}),        # GA 2005 map; TX court remedy (LULAC v. Perry)
+    2016: frozenset({"FL", "NC", "VA"}),  # court-ordered remedial maps
+    2018: frozenset({"PA"}),              # PA Supreme Court map (Feb 2018)
+    2020: frozenset({"NC"}),              # NC remedial map (Harper v. Lewis)
+    2024: frozenset({"AL", "GA", "LA", "NC", "NY"}),
+}
+
+
+def map_changed(state: str, prior_cycle: int | None, cycle: int) -> bool:
+    """True when ``state``'s House map changed after ``prior_cycle`` and by
+    ``cycle`` -- census redraws, documented historical mid-decade redraws and
+    the 2026 redraws above -- so a ``prior_cycle`` district result describes
+    boundaries that are no longer in use."""
+    if prior_cycle is None:
+        return False
+    changes = set(CENSUS_MAP_CYCLES)
+    changes.update(c for c, states in HISTORICAL_MIDDECADE_REMAPS.items() if state in states)
+    if state in MIDDECADE_REMAP_CYCLE:
+        changes.add(MIDDECADE_REMAP_CYCLE[state])
+    return any(prior_cycle < change <= cycle for change in changes)
+
+
 def current_map_cycle(state: str) -> int:
     """First cycle the state's present U.S. House boundaries are in effect."""
     return MIDDECADE_REMAP_CYCLE.get(state, POST_CENSUS_CYCLE)

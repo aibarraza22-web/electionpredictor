@@ -2,7 +2,7 @@
 
 No polls, no poll-derived expert ratings. Every input is a hard, pre-election
 fact that also existed for every past election, so the whole system can be
-replayed on 1990-2024 exactly as it runs on 2026:
+replayed on 2012-2024 exactly as it runs on 2026 (trained from 1990 on):
 
 * **district/state partisanship** -- Cook PVI, i.e. how the place voted for
   President (``app.ingest.cook_pvi``), on the CURRENT lines, so redrawn 2026
@@ -19,17 +19,18 @@ has a genuine out-of-sample record on every past race. Two uses of that
 record were tested (research claim T-004):
 
 1. **Which system to trust.** Picking a different system per seat from its
-   last three elections made House calls WORSE (89.5% vs 94.6% winner
-   accuracy, 2016-24): three elections cannot separate skill from luck. The
-   same idea applied to the chamber's hundreds of past close races is stable
-   -- it picks the same system every cycle -- so the published system is the
-   one with the best close-race record, re-chosen on every run.
+   last three elections never beat one system chosen on the chamber's
+   hundreds of past close races (2016-24: House 94.4% vs 94.6% of races,
+   Senate 88.6% vs 91.6%; per-state picks were worse still) -- three
+   elections cannot separate skill from luck. The chamber-wide choice is
+   stable (the same system every cycle from 2014 on), so the published
+   system is the one with the best close-race record, re-chosen every run.
 2. **How sure to be.** A seat's and a state's own past misses DO predict
    its future misses. Each race's uncertainty is a shared national term (what
    waves do to every seat) plus a local term shrunk from the seat's and
-   state's own residuals. That improved log loss in 9 of 10 held-out
-   chamber-cycles; the national floor is what stops a quiet history from
-   hiding wave risk (without it the House 2018 wave cycle got worse).
+   state's own residuals: log loss improved in 11 of 12 held-out
+   chamber-cycles vs one uniform uncertainty. The national floor is what
+   stops a quiet local history from hiding wave risk.
 """
 from __future__ import annotations
 

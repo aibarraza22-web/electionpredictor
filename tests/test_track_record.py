@@ -447,3 +447,38 @@ def test_no_best_system_is_crowned_on_a_handful_of_races():
         preds["pvi_inc"] = 2.0
         many.append(tr.Scored(2012, f"house-AA-{i:02d}", "AA", 3.0, preds))
     assert tr.rank_systems(many)[0] == "pvi_inc"
+
+
+def test_conflicting_evidence_widens_uncertainty():
+    """Maine 2020: polls said D+4.5, every poll-free system said Collins. When the
+    systems disagree, or the polls pull the poll layer away from them, sigma
+    grows; when they agree it does not."""
+    agree = {"persistence": 5.0, "pvi": 5.2, "pvi_inc": 4.8, "core": 5.1, "full": 4.9,
+             tr.ENSEMBLE: 5.0, tr.POLL_LAYER: 5.3}
+    split = {"persistence": -21.7, "pvi": 13.1, "pvi_inc": -1.2, "core": -13.5, "full": -7.3,
+             tr.ENSEMBLE: -6.1, tr.POLL_LAYER: 4.9}
+    assert tr.widen(5.0, agree, "pvi_inc") == pytest.approx(5.0, abs=0.1)
+    assert tr.widen(5.0, split, "pvi_inc") > 12.0        # the five systems span 35 points (sd 11.7)
+    # polled race: widened by the polls-vs-fundamentals gap (11 points), not the spread
+    assert tr.disagreement(split, tr.POLL_LAYER) == pytest.approx(11.0)
+    assert tr.widen(5.0, split, tr.POLL_LAYER) == pytest.approx((25 + 121) ** 0.5)
+    # an unpolled race has no gap term; missing inputs never raise
+    assert tr.disagreement({tr.ENSEMBLE: 1.0}, tr.ENSEMBLE) == 0.0
+    assert tr.disagreement({}, tr.POLL_LAYER) == 0.0
+
+
+def test_lean_curve_applies_to_the_house_only():
+    house = tr.SeatRow(seat_key="h", chamber="house", state="AA", district="1", cycle=2026, y=None, pvi=-30.0)
+    senate = tr.SeatRow(**{**house.__dict__, "chamber": "senate", "seat_key": "s"})
+    names, x = tr.vector(house, ["pvi"])
+    assert "pvi_curve" in names and x[names.index("pvi_curve")] == pytest.approx(-9.0)
+    assert "pvi_curve" not in tr.vector(senate, ["pvi"])[0]
+
+
+def test_seat_record_reports_the_margin_miss():
+    rec = tr.Scored(2020, "senate-ME", "ME", -9.2, {"ensemble": 4.9}, chamber="senate")
+    row = tr.SeatRow(seat_key="senate-ME", chamber="senate", state="ME", district=None, cycle=2026, y=None)
+    out = tr.seat_record({(2020, "senate-ME"): rec}, row, "ensemble")
+    assert out[0]["margin_miss"] == pytest.approx(-14.1) and out[0]["called_correctly"] is False
+    blowout = tr.Scored(2020, "senate-ME", "ME", 100.0, {"ensemble": 4.9}, chamber="senate")
+    assert tr.seat_record({(2020, "senate-ME"): blowout}, row, "ensemble")[0]["margin_miss"] is None

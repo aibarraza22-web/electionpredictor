@@ -1,6 +1,6 @@
 # Methodology
 
-## Current published model: track record (2026.22)
+## Current published model: track record (2026.23)
 
 `app/track_record.py`. Base inputs, all available before every past election: Cook PVI on the race's current lines, the last contested
 same-map result, statewide House lean, incumbent-on-ballot status, and the
@@ -21,6 +21,13 @@ before the one it predicts). From those out-of-sample records:
 * **How sure:** sigma² = national² + local², where national is the SD of
   past cycle-mean misses (waves) and local shrinks the seat's and state's own
   past misses toward the chamber (3 and 20 pseudo-observations).
+* **Conflicting evidence (2026.23):** sigma grows with disagreement —
+  sigma² += (spread of the five systems)², and on polled races the gap between
+  the poll layer and the poll-free average replaces the spread. Maine 2020
+  (polls D+4.5, every poll-free system Collins) went from 95% to 81%. Held-out
+  log loss: House 0.1787 → 0.1669, Senate 0.2022 → 0.1942.
+* **Lean curve (2026.23):** House presidential lean enters with a curve term
+  (pvi·|pvi|/100); lopsided districts had been mis-sized by 4–7 points.
 * **Odds:** a slope-only logistic calibration of margin/sigma, adopted per
   chamber only when the walk-forward replay says it beats the raw odds on
   mean log loss and in most held-out cycles.

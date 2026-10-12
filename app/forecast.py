@@ -29,6 +29,10 @@ CYCLE = 2026
 # snapshots are immutable per (race_id, as_of, model_version): a same-day
 # rerun under an unchanged version keeps the day's first frozen numbers, so a
 # real prediction-affecting change must bump the version to surface.
+# 2026.23: margin and uncertainty audit (research claims D-007, T-006): a lean
+# curve term for the House (lopsided districts were mis-sized by 4-7 points) and
+# uncertainty that grows when the evidence conflicts (the five systems disagree,
+# or the polls disagree with the fundamentals -- Maine 2020).
 # 2026.22: results data fixed (independents who caucus with a party, fusion
 # tickets, blank party labels -- research claim D-004) and two validated
 # additions to the track-record model: a poll layer applied ONLY to races that
@@ -38,7 +42,7 @@ CYCLE = 2026
 # ratings, no unvalidated campaign layer -- only inputs that also existed for
 # every past election, so the whole system is replayed on 2010-2024 exactly as
 # it runs on 2026.
-MODEL_VERSION = "2026.22"
+MODEL_VERSION = "2026.23"
 # Competitive races must have at least presidential partisanship on their
 # current lines plus a known ballot status (grade C). Redrawn 2026 seats have,
 # by construction, no same-map history, so A/B cannot be required of them.
@@ -1033,6 +1037,49 @@ RESEARCH_CLAIMS.extend([
      "decision": "party_labels.is_two_party_contest; medsl.parse stores non-contests as "
                  "uncontested; track_record.MIN_RANKING_CLOSE_RACES = 60.",
      "source": "User: the Alaska Senate backtests look weird; Maine got one backtest wrong"},
+    {"id": "D-007",
+     "claim": "FIXED: House margins were biased in lopsided districts (predicted beyond +/-40 "
+              "missed by -6.8 / +4.1 points); presidential lean is not linear in the margin.",
+     "chamber": "house", "metric": "held-out margin error by predicted-margin band",
+     "mechanism": "A curve term pvi*|pvi|/100 lets a +30 district vote more than twice as far "
+                  "from even as a +15 one. Bias audit of the 2012-24 replay (2,714 House and "
+                  "241 Senate races): no overall tilt toward either party (House: actual minus "
+                  "predicted +0.4 in D-favored seats, -0.8 in R-favored; Senate +0.3 / +1.8), "
+                  "and the cycle-level misses (2012 +5.2, 2020 -4.3 House) are the national "
+                  "environment, not a fixable seat bias. Tested and NOT adopted: a red-state "
+                  "shift on poll-layer races (polls overstate Democrats by ~5 points in Republican "
+                  "states) improved Senate winner accuracy 90.9% -> 91.7% and error 6.5 -> 6.3 but "
+                  "worsened log loss 0.202 -> 0.217; a Senate lean curve (a wash on error, worse "
+                  "on log loss); a 4-year lean trend (no effect).",
+     "status": "Production",
+     "validation": "House 2012-24: error 7.32 -> 6.78 points (better in 6 of 7 cycles), log loss "
+                   "0.1828 -> 0.1787, winner accuracy 93.85% -> 93.88%. Predicted margins beyond "
+                   "+/-40 now miss by -3.6 / +2.5 points.",
+     "decision": "track_record.PVI_CURVE = {house: 100, senate: 0}.",
+     "source": "User: check the margins in backtesting for races called right but biased"},
+    {"id": "T-006",
+     "claim": "FIXED: the model did not register conflicting evidence. Maine 2020 was published "
+              "at D+4.9 with 95% confidence while every poll-free system said Collins.",
+     "chamber": "both", "metric": "held-out log loss, Brier score, confident misses",
+     "mechanism": "Uncertainty is widened by how much the evidence disagrees: sigma^2 = "
+                  "sigma_track_record^2 + (w*spread)^2, where spread is the standard deviation "
+                  "of the five poll-free systems, and for a race using the poll layer the term "
+                  "is the distance between the polls' answer and the poll-free average. Both "
+                  "predict error: when polls and fundamentals differed by 15+ points the House "
+                  "missed by 10.4 (sigma 6.9) and the Senate by 19.6 (sigma 15.7). The poll "
+                  "layer itself also stays: a poll average is fitted, not trusted outright, and "
+                  "counts n/(n+2) of the way.",
+     "status": "Production",
+     "validation": "Full replay 2012-24: House log loss 0.1787 -> 0.1669, Brier 0.0486 -> 0.0467 "
+                   "(better in 6 of 7 cycles, tied in one); Senate 0.2022 -> 0.1942, Brier 0.0621 "
+                   "-> 0.0614 (better in 4 of 7 cycles, worse in 2012, 2014 and 2022); "
+                   "winner accuracy unchanged. Maine 2020 is now D+4.9 at 81% (sigma 5.0 -> "
+                   "12.1) instead of 95%; no Senate call made at 90%+ confidence was wrong "
+                   "(0 of 153). Cost: House polled-race log loss 0.341 -> 0.357, because the "
+                   "pooled odds calibration became more confident.",
+     "decision": "track_record.DISAGREEMENT_WEIGHT = 1.0, POLL_GAP_WEIGHT = 1.0 (flat region "
+                 "0.5-2).",
+     "source": "User: the model must be built to account for polling misses like Maine's"},
 ])
 
 # Claims whose mechanism the track-record model (T-004) no longer publishes. Kept
@@ -1323,7 +1370,7 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     ratings are not a forecast input (T-004)."""
     from .campaign import victory_bands
     from .track_record import (ALL_CANDIDATES, LAYER_SYSTEMS, POLL_LAYER, SYSTEMS, Inputs,
-                               TrackRecordModel, label, poll_lookup, probability)
+                               TrackRecordModel, label, poll_lookup, probability, widen)
 
     as_of = as_of or store.now()
     fingerprint = store.data_fingerprint()
@@ -1365,7 +1412,8 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
         for candidate in ALL_CANDIDATES:
             if candidate not in out["systems"]:
                 continue  # the poll layer exists only on polled races
-            c_sigma = model.uncertainty[candidate].local(CYCLE, row.seat_key, row.state)["sigma"]
+            c_sigma = widen(model.uncertainty[candidate].local(CYCLE, row.seat_key, row.state)["sigma"],
+                            out["raw"], candidate)
             c_mean = out["systems"][candidate]
             # Same odds calibration as the published number, so the board's
             # rows are comparable with it (and identical for the published one).

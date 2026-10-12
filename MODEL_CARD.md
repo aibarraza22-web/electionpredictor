@@ -1,6 +1,6 @@
 # Model card
 
-**Model version:** 2026.22 — track-record model (`app/track_record.py`):
+**Model version:** 2026.23 — track-record model (`app/track_record.py`):
 five ridge systems over certified results, Cook PVI on current lines,
 incumbency and the national midterm pattern; each chamber publishes the system
 with the best out-of-sample close-race record, per-race uncertainty is sized by
@@ -19,6 +19,17 @@ counts are stored with each fit in `model_versions.coefficients`.
 **Validation:** expanding-window backtests run weekly, on manual full runs,
 and after controlled methodology changes. Frequent data-only refreshes reuse
 the last validated model. Metrics live in `/api/backtests`, never in prose.
+
+**Margin audit (2026.23):** across the 2012–24 replay the margins show no tilt
+toward either party (actual minus predicted: House +0.4 in Democratic-favored
+seats and −0.8 in Republican-favored; Senate +0.3 / +1.8); the large cycle-level
+misses (House 2012 +5.2, 2020 −4.3) are the national environment. Margins in
+lopsided House districts were biased and are fixed by a lean curve term (error
+7.32 → 6.78 points). Conflicting evidence now widens uncertainty (House log
+loss 0.1787 → 0.1669, Senate 0.2022 → 0.1942; Maine 2020 95% → 81%). Polls
+overstate Democrats by ~5 points in Republican-leaning states; a correction
+for that improved Senate winner accuracy but worsened log loss and was not
+adopted.
 
 **Validation (2026.22):** the whole procedure is replayed per held-out cycle
 2012–2024 using only earlier cycles. All races: House 93.9% called, toss-ups

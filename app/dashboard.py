@@ -479,10 +479,11 @@ function trackRecordAnalysis(a,r){
   const rec=a.track_record_here||[], sum=a.track_record_here_summary||{}, inp=a.inputs||{}, u=a.uncertainty||{};
   const area=r.chamber==="house"?"this district (same lines)":"this state's Senate races";
   const winnerOf=e=>`${e.winner_party==="D"?'<span class="dem">Democratic side</span>':e.winner_party==="R"?'<span class="rep">Republican side</span>':"—"}${e.note?`<div class="small muted">${esc(e.note)}</div>`:""}`;
+  const missOf=e=>e.margin_miss==null?"—":`${Math.abs(e.margin_miss).toFixed(1)} pts ${e.margin_miss>0?"more D":"more R"}${e.called_correctly&&Math.abs(e.margin_miss)>=10?'<div class="muted">right winner, margin off 10+</div>':""}`;
   const recRows=rec.length?rec.map(e=>`<tr><td class="mono">${e.cycle}${r.chamber==="senate"&&e.seat_key&&e.seat_key.endsWith("-special")?" (special)":""}</td>
-      <td class="mono">${sgn(e.predicted_margin)}</td><td class="mono">${sgn(e.actual_margin)}</td><td>${winnerOf(e)}</td>
+      <td class="mono">${sgn(e.predicted_margin)}</td><td class="mono">${sgn(e.actual_margin)}</td><td class="mono small">${missOf(e)}</td><td>${winnerOf(e)}</td>
       <td>${e.called_correctly?'<span class="dem">✓ correct</span>':'<span class="rep">✗ missed</span>'}</td></tr>`).join("")
-    :`<tr><td colspan="5" class="muted">No past elections on these lines${inp.redrawn_for_2026?" — this district was redrawn for 2026":""}; its uncertainty falls back to the state and chamber record.</td></tr>`;
+    :`<tr><td colspan="6" class="muted">No past elections on these lines${inp.redrawn_for_2026?" — this district was redrawn for 2026":""}; its uncertainty falls back to the state and chamber record.</td></tr>`;
   const ranking=(a.polls&&a.polls.layer_used&&(a.chamber_ranking_polled||[]).length?a.chamber_ranking_polled:(a.chamber_ranking||[])), rankOf={}; ranking.forEach(x=>rankOf[x.system]=x);
   const every=Object.entries(a.every_system||{}).sort((x,y)=>(rankOf[y[0]]?.close_race_accuracy||0)-(rankOf[x[0]]?.close_race_accuracy||0));
   const inc=inp.incumbent_running==null?"unknown":inp.incumbent_running==="open"?"open seat":`${inp.incumbent_running} incumbent running`;
@@ -490,7 +491,7 @@ function trackRecordAnalysis(a,r){
   const v=a.victory_bands||{}, ex=a.expert_consensus_for_reference, pl=a.polls||{n:0};
   return `<h3 style="margin-top:1rem">Track record here <span class="muted small" style="font-weight:400">— how ${esc(a.system_label)} did in ${area}, each prediction made before that election</span></h3>
     <p class="small" style="margin:.2rem 0 .5rem">${sum.elections?`Called <b>${sum.called_correctly} of ${sum.elections}</b> past elections here correctly.`:"No usable history here."} ${esc(a.why_this_system?(a.why_this_system+"."):"")}</p>
-    <div class="tablewrap"><table><thead><tr><th scope="col">Election</th><th scope="col">Predicted</th><th scope="col">Result (D−R)</th><th scope="col">Winner</th><th scope="col">Call</th></tr></thead><tbody>${recRows}</tbody></table></div>
+    <div class="tablewrap"><table><thead><tr><th scope="col">Election</th><th scope="col">Predicted</th><th scope="col">Result (D−R)</th><th scope="col">Margin miss</th><th scope="col">Winner</th><th scope="col">Call</th></tr></thead><tbody>${recRows}</tbody></table></div>
     <h3 style="margin-top:1rem">What each system says <span class="muted small" style="font-weight:400">— ordered by record on past close races${a.polls&&a.polls.layer_used?" that had polls":""}</span></h3>
     <div class="tablewrap"><table><thead><tr><th scope="col">System</th><th scope="col">Close-race record</th><th scope="col">Margin</th><th scope="col">Dem win</th></tr></thead><tbody>`+
     every.map(([k,x])=>`<tr><td>${k===a.system?`<b>${esc(x.label)} (published)</b>`:esc(x.label)}</td>
@@ -501,7 +502,7 @@ function trackRecordAnalysis(a,r){
       <div class="tile"><div class="lbl">Last result, same lines</div><div class="big mono" style="font-size:1.12rem">${inp.same_map_prior_margin==null?"—":sgn(inp.same_map_prior_margin)}</div><div class="det">${inp.same_map_prior_cycle||(inp.redrawn_for_2026?"redrawn for 2026":"none")}</div></div>
       <div class="tile"><div class="lbl">On the ballot</div><div class="big" style="font-size:1.02rem;padding-top:.3rem">${esc(inc)}</div></div>
       <div class="tile"><div class="lbl">Polls</div><div class="big mono" style="font-size:1.12rem">${pl.n?sgn(pl.average_margin):"none"}</div><div class="det">${pl.n?`${pl.n} poll${pl.n===1?"":"s"}, latest ${esc(pl.latest_poll||"—")} · ${pl.layer_used?"used":"not used"}`:"no usable polls for this race"}</div></div>
-      <div class="tile"><div class="lbl">Uncertainty (1 s.d.)</div><div class="big mono" style="font-size:1.12rem">±${(+u.sigma||0).toFixed(1)}</div><div class="det">national ±${(+u.national||0).toFixed(1)} · local ±${(+u.local||0).toFixed(1)}</div></div>
+      <div class="tile"><div class="lbl">Uncertainty (1 s.d.)</div><div class="big mono" style="font-size:1.12rem">±${(+u.sigma||0).toFixed(1)}</div><div class="det">national ±${(+u.national||0).toFixed(1)} · local ±${(+u.local||0).toFixed(1)}${+u.disagreement>=1?` · evidence conflict ±${(+u.disagreement).toFixed(1)}`:""}</div></div>
     </div>
     <div class="klist" style="margin-top:.7rem">
       <div><span class="muted">D narrow (0–4)</span><b class="mono">${pct(v.dem_narrow_0_to_4||0)}</b></div>

@@ -68,6 +68,14 @@ Y_CLIP = 40.0               # blowouts carry no information about close races
 MIN_RANKING_CLOSE_RACES = 60
 CALIBRATION_TOLERANCE = 0.01   # held-out log loss; see TrackRecordModel._decide_calibration
 CALIBRATION_MIN_SLOPE = 1.5    # z-slope of the calibrated odds; 1.0 would mean raw odds are right
+# Presidential lean is not linear in the margin: a +30 district votes more than
+# twice as far from even as a +15 one. A curve term pvi*|pvi|/100 in the House
+# cut held-out error in 6 of 7 cycles (full replay 2012-24: 7.32 -> 6.78 points,
+# log loss 0.1828 -> 0.1787, winner accuracy flat) and removed most of the
+# lopsided-district bias: predicted margins beyond +/-40 had been missing by
+# -6.8 / +4.1 points, now -3.6 / +2.5. NOT used for the Senate, where the same
+# term is a wash on error and slightly worse on log loss (0.2022 -> 0.2143).
+PVI_CURVE = {"house": 100.0, "senate": 0.0}
 PRIOR_BOUND = 50.0          # a seat's last margin is clipped to +/- this as a feature
 UNCONTESTED = 99.0          # |margin| at/above this: one major party absent
 L2 = 4.0
@@ -75,6 +83,22 @@ LOCAL_ELECTIONS = 3         # "the past three elections here"
 SEAT_SHRINK = 3.0           # pseudo-observations pulling a seat toward its state
 STATE_SHRINK = 20.0         # ... and a state toward the chamber
 MIN_SIGMA = 3.0
+# When the evidence disagrees, say so. A race's uncertainty is widened by how far
+# apart the five poll-free systems land (their standard deviation) and, where the
+# poll layer is used, by how far the polls pull it from the poll-free average:
+#     sigma^2 = sigma_track_record^2 + (w * spread)^2 [+ (w * poll_gap)^2]
+# Held-out (walk-forward, calibration refit each cycle): House log loss 0.138 ->
+# 0.129 (better in 5 of 6 cycles), Senate 0.155 -> 0.140 (4 of 5), with winner
+# accuracy unchanged. Maine 2020 is the case that motivated it: the polls said
+# D+4.5, every poll-free system said Collins (-1 to -22), and the model published
+# D+4.9 at 95% with a sigma of 5.0 -- an 11-point polls-vs-fundamentals conflict
+# it never registered. w=1 is a round number from a flat region (0.5-2). Full
+# replay 2012-24: House log loss 0.1787 -> 0.1669 and Brier 0.0486 -> 0.0467;
+# Senate 0.2022 -> 0.1942 and 0.0621 -> 0.0614; winner accuracy unchanged. The
+# cost: the odds recalibrate more confident, so the House's polled-race log loss
+# slipped 0.341 -> 0.357 while the unpolled races (most of them) improved.
+DISAGREEMENT_WEIGHT = 1.0
+POLL_GAP_WEIGHT = 1.0
 # The September 2012 PVI revision still described the pre-2012 districts.
 PVI_ON_OLD_LINES = {2012}
 
@@ -144,7 +168,7 @@ PERSONAL_VOTE_REFERENCE = "pvi_inc"
 # Feature -> human group, for the additive "why this forecast" breakdown.
 GROUPS = {"intercept": "baseline", "prior": "seat history", "has_prior": "seat history",
           "stale": "seat history", "has_stale": "seat history",
-          "pvi": "presidential lean", "has_pvi": "presidential lean",
+          "pvi": "presidential lean", "has_pvi": "presidential lean", "pvi_curve": "presidential lean",
           "lean": "statewide House lean", "has_lean": "statewide House lean",
           "inc": "incumbency", "open_x_prior": "seat history",
           "poll": "polls", "personal_vote": "incumbent's personal vote",
@@ -201,6 +225,10 @@ def vector(row: SeatRow, features: list[str]) -> tuple[list[str], list[float]]:
     if "pvi" in features:
         names += ["pvi", "has_pvi"]
         x += [row.pvi if row.pvi is not None else 0.0, float(row.pvi is not None)]
+        curve = PVI_CURVE.get(row.chamber, 0.0)
+        if curve:
+            names.append("pvi_curve")
+            x.append(row.pvi * abs(row.pvi) / curve if row.pvi is not None else 0.0)
     if "lean" in features:
         names += ["lean", "has_lean"]
         x += [clip(row.lean) if row.lean is not None else 0.0, float(row.lean is not None)]
@@ -557,6 +585,26 @@ class Uncertainty:
                 "state_errors": len(state_errors), "seat_errors": len(seat_errors)}
 
 
+def disagreement(raw: dict[str, float], system: str) -> float:
+    """How much the evidence conflicts for this race, in margin points.
+
+    Poll-free systems: the spread (standard deviation) of the five systems'
+    predictions. The poll layer: its distance from their average -- the polls
+    against the fundamentals. (Adding the spread to polled races as well made
+    the House's polled-race log loss worse for no gain.)"""
+    if system == POLL_LAYER:
+        if POLL_LAYER in raw and ENSEMBLE in raw:
+            return POLL_GAP_WEIGHT * abs(raw[POLL_LAYER] - raw[ENSEMBLE])
+        return 0.0
+    values = [raw[name] for name in SYSTEMS if name in raw]
+    return pstdev(values) if len(values) >= 3 else 0.0
+
+
+def widen(sigma: float, raw: dict[str, float], system: str) -> float:
+    """``sigma`` grown by the conflict in the evidence (see DISAGREEMENT_WEIGHT)."""
+    return sqrt(sigma ** 2 + (DISAGREEMENT_WEIGHT * disagreement(raw, system)) ** 2)
+
+
 def probability(mean: float, sigma: float, calibration: tuple | None = None) -> float:
     """Win probability from a margin and its sigma; with ``calibration``
     (a, b) it is the logistic read of z = mean/sigma fitted on past outcomes."""
@@ -636,6 +684,10 @@ def seat_record(records: dict[tuple[int, str], Scored], row: SeatRow,
         out.append({"cycle": scored.cycle, "seat_key": scored.seat_key,
                     "predicted_margin": round(predicted, 1),
                     "actual_margin": round(scored.y, 1),
+                    # actual minus predicted (+ = more Democratic than predicted);
+                    # None where a party was absent and the margin is not a measure
+                    "margin_miss": (round(clip(scored.y, Y_CLIP) - predicted, 1)
+                                    if abs(scored.y) < UNCONTESTED else None),
                     # who actually won, and why a margin can look odd: an
                     # independent on a party's side is named, not hidden
                     "winner_party": scored.winner,
@@ -758,18 +810,19 @@ class TrackRecordModel:
                 if s.cycle != target:
                     continue
                 system = pick_for(ranking, s, ranking_polled)
-                sigma = unc[system].local(target, s.seat_key, s.state)["sigma"]
+                sigma = widen(unc[system].local(target, s.seat_key, s.state)["sigma"], s.raw, system)
                 rows.append((s.preds[system], sigma, s.y))
                 if POLL_LAYER in s.preds:
                     free = pick_for(ranking, s)
                     polled_with.append((s.preds[system], sigma, s.y))
                     polled_without.append((s.preds[free],
-                                           unc[free].local(target, s.seat_key, s.state)["sigma"], s.y))
+                                           widen(unc[free].local(target, s.seat_key, s.state)["sigma"],
+                                                 s.raw, free), s.y))
                 seat_order[target].append((s.seat_key, system))
                 for c in ALL_CANDIDATES:
                     if c not in s.preds:
                         continue
-                    c_sigma = unc[c].local(target, s.seat_key, s.state)["sigma"]
+                    c_sigma = widen(unc[c].local(target, s.seat_key, s.state)["sigma"], s.raw, c)
                     per_system[c].append((s.preds[c], c_sigma, s.y))
                     self.backtest_rows.append((c, target, s.seat_key, s.preds[c], c_sigma, s.y,
                                                probability(s.preds[c], c_sigma)))
@@ -842,7 +895,8 @@ class TrackRecordModel:
         system = pick_for(self.ranking, row, self.ranking_polled)
         mean = preds[system]
         unc = self.uncertainty[system].local(row.cycle, row.seat_key, row.state)
-        sigma = unc["sigma"]
+        sigma = widen(unc["sigma"], raw, system)
+        unc = {**unc, "sigma": sigma, "disagreement": round(disagreement(raw, system), 3)}
         fitted = {n: m for n, m in self.systems.items() if n in SYSTEMS}
         if system == ENSEMBLE:
             groups: dict[str, float] = defaultdict(float)
@@ -856,7 +910,8 @@ class TrackRecordModel:
             groups["incumbent's personal vote"] = groups.get("incumbent's personal vote", 0.0) + term
         record = seat_record(self.records, row, system, fallback=self.ranking[0])
         return {"system": system, "mean": mean, "sigma": sigma,
-                "probability": probability(mean, sigma, self.calibration), "systems": preds,
+                "probability": probability(mean, sigma, self.calibration), "systems": preds, "raw": raw,
+                "disagreement": disagreement(raw, system),
                 "contributions": dict(groups), "uncertainty": unc,
                 "personal_vote": term, "polls_used": system == POLL_LAYER,
                 "seat_record": record, "grade": grade(row, record)}

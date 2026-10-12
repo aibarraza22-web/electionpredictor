@@ -920,32 +920,35 @@ RESEARCH_CLAIMS.extend([
                   "(no gain in the Senate, a small House gain even though the FEC totals used "
                   "include money that follows winners -- a leaky test that can only flatter "
                   "fundraising, so it is not trusted). PROBABILITY CALIBRATION is adopted per "
-                  "chamber whenever it lowers held-out log loss: among held-out races whose raw "
-                  "underdog odds were <=30%, raw odds expected 171 upsets in the House and 12 in "
-                  "the Senate, and 72 and 4 happened. (An earlier 'better in most cycles' rule "
-                  "flipped the Senate to uncalibrated on a 0.003 difference once polls were in, "
-                  "moving Democratic Senate control 16 points -- too fragile for a headline.)",
+                  "chamber when its held-out log loss is within 0.01 of the raw odds AND the "
+                  "fitted slope shows the raw odds are underconfident (>=1.5; it is 2.4 House, "
+                  "2.8 Senate): among held-out races whose raw underdog odds were <=30%, raw "
+                  "odds expected 170 upsets in the House and 14 in the Senate, and 72 and 4 "
+                  "happened. (Earlier rules -- 'better in most cycles', then 'strictly lower "
+                  "log loss' -- flipped the Senate on 0.003-0.004 differences and moved "
+                  "Democratic Senate control 16 points; early held-out fits rest on a few dozen "
+                  "Senate races while the reliability evidence is large and stable.)",
      "status": "Production",
      "validation": "Whole procedure replayed per held-out cycle, 2012-2024, vs 2026.21 on "
                    "the same corrected data. House, all races: winner accuracy 93.3% -> 93.9%, "
                    "toss-ups (decided by <10) 72.3% -> 75.1%, log loss 0.207 -> 0.183, error "
-                   "8.0 -> 7.3 points. Senate, all races: log loss 0.241 -> 0.212 and error "
-                   "7.6 -> 7.2, but winner accuracy 90.5% -> 90.1% and toss-ups 72.9% -> 71.4% "
-                   "(one race each) -- in the Senate polls sharpen margins and probabilities, "
-                   "not who wins. On races that HAD polls (House 417, Senate 180 across "
-                   "2012-2022): House winner accuracy 80.1% -> 83.9%, toss-ups 65.7% -> 71.2%, "
-                   "error 9.3 -> 5.6, log loss 0.471 -> 0.337; Senate error 7.7 -> 7.1, log "
-                   "loss 0.293 -> 0.215, winner accuracy 90.0% -> 89.4%. Counting the poll "
-                   "average n/(n+2) of the way (so one poll cannot swing a race) ties on "
-                   "winner accuracy and improves log loss and interval coverage vs counting it "
-                   "in full. The poll layer is used on a polled race only when it has the best "
-                   "out-of-sample close-race record on past POLLED races (it does, in both "
-                   "chambers). Excluded from polling: races won by a caucus-aligned "
-                   "independent (Maine's King -- the stored polls are Republican vs the weak "
-                   "Democratic nominee) and multi-candidate polls whose Democratic + Republican "
-                   "shares are under 75% or either under 12% (two Alaska polls read D 48 / R "
-                   "2.7 and made Alaska 'Safe Democratic'). Historical polls end in 2022, so the "
-                   "polled backtest cannot include 2024.",
+                   "8.0 -> 7.3 points. Senate, all races (incl. the minimum-sample ranking rule, "
+                   "D-006): winner accuracy 90.5% -> 90.9%, log loss 0.241 -> 0.202, error 7.6 "
+                   "-> 6.5, toss-ups 72.9% -> 71.4% (one race). On races that HAD polls (House "
+                   "417, Senate 179 across 2012-2022): House winner accuracy 80.1% -> 83.9%, "
+                   "toss-ups 65.7% -> 71.2%, error 9.3 -> 5.6, log loss 0.471 -> 0.337; Senate "
+                   "error 6.8 -> 6.3, log loss 0.282 -> 0.205, winner accuracy 91.1% -> 90.5% "
+                   "-- in the Senate polls sharpen margins and probabilities, not who wins. "
+                   "Counting the poll average n/(n+2) of the way (so one poll cannot swing a "
+                   "race) ties on winner accuracy and improves log loss and interval coverage "
+                   "vs counting it in full. The poll layer is used on a polled race only when "
+                   "it has the best out-of-sample close-race record on past POLLED races (it "
+                   "does, in both chambers). Excluded from polling: races won by a "
+                   "caucus-aligned independent (Maine's King -- the stored polls are "
+                   "Republican vs the weak Democratic nominee) and multi-candidate polls whose "
+                   "Democratic + Republican shares are under 75% or either under 12% (two "
+                   "Alaska polls read D 48 / R 2.7 and made Alaska 'Safe Democratic'). "
+                   "Historical polls end in 2022, so the polled backtest cannot include 2024.",
      "decision": "track_record.POLL_LAYER and PERSONAL_VOTE_WEIGHT (house 0.3, senate 0.0). "
                  "The poll-free forecast stays visible per race alongside the polled one.",
      "source": "User: tweak the models so each race backtests as accurately as possible, "
@@ -994,6 +997,42 @@ RESEARCH_CLAIMS.extend([
                    "2026 (9 states) match the source.",
      "decision": "redistricting.MIDDECADE_REMAP_CYCLE and NET_DEM_SEAT_SHIFT no longer list MO.",
      "source": "User: did you account for new redistricted lines since 2022?"},
+])
+
+RESEARCH_CLAIMS.extend([
+    {"id": "D-006",
+     "claim": "FIXED: Alaska's Senate backtests were distorted by races that were not "
+              "Democrat-vs-Republican contests; and a 'best system' was being crowned on about "
+              "20 races (Maine 2012: R+35 predicted).",
+     "chamber": "both", "metric": "backtest rows; held-out Senate accuracy / log loss",
+     "mechanism": "Alaska 2010 (Murkowski write-in vs Miller, both Republicans), 2016 (a "
+                  "Libertarian at 29% and an independent at 13% left the Democrat at 11.6%) and "
+                  "2022 (Murkowski vs Tshibaka, both Republicans) were learned from and graded as "
+                  "'R+52', 'R+58' and 'R+78' margins, so the page showed predictions like -29.7 "
+                  "against a result of -58.5. Across 50 years the rule (top two finishers on the "
+                  "same side, or third parties above 30%) flags only 6 Senate and 18 House races, "
+                  "every one a genuine non-contest (also Lieberman vs Lamont, Louisiana's "
+                  "same-party runoffs, Florida 2010 with Crist at 30%). They are now stored as "
+                  "uncontested with the real winner kept. Separately, the Senate's first replayed "
+                  "cycle had ~20 close races to judge and crowned 'seat history'; below 60 close "
+                  "races the chamber now uses the average of all five systems. MAINE: the 2020 "
+                  "miss (predicted D+4.9, result R+9.2) is a polling miss -- 13 polls, nearly all "
+                  "Gideon ahead; the 2012 miss is King, an independent in an open seat. A "
+                  "Collins-specific rule was NOT added: the general version of it -- each "
+                  "senator's own persistent over/under-performance -- has a carry-over slope of "
+                  "0.05 (90% interval -0.05..0.14) across 131 same-incumbent Senate pairs, and "
+                  "big misses mostly reverse (FL -46 -> +5, NH -35 -> +9), so a single-race "
+                  "patch would memorize one result. Clipping blowout priors at 15/25/35 points "
+                  "was also tested and did not help.",
+     "status": "Production",
+     "validation": "Held-out Senate 2012-24: winner accuracy 90.1% -> 90.9%, log loss 0.212 -> "
+                   "0.202, error 7.2 -> 6.5 points, 80% intervals cover 81.7% (nominal 80%); "
+                   "identical at ranking thresholds 40, 60 and 100; House unchanged. Alaska's "
+                   "remaining backtests: 2014 predicted -8.3 vs -2.3, 2020 predicted -10.2 vs "
+                   "-13.4, both correct.",
+     "decision": "party_labels.is_two_party_contest; medsl.parse stores non-contests as "
+                 "uncontested; track_record.MIN_RANKING_CLOSE_RACES = 60.",
+     "source": "User: the Alaska Senate backtests look weird; Maine got one backtest wrong"},
 ])
 
 # Claims whose mechanism the track-record model (T-004) no longer publishes. Kept

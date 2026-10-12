@@ -22,17 +22,23 @@ the last validated model. Metrics live in `/api/backtests`, never in prose.
 
 **Validation (2026.22):** the whole procedure is replayed per held-out cycle
 2012–2024 using only earlier cycles. All races: House 93.9% called, toss-ups
-(decided by <10 points) 75.1%, average error 7.3 points; Senate 90.1%,
-toss-ups 71.4%, error 7.2. On races that had polls (2012–2022), polls take
+(decided by <10 points) 75.1%, average error 7.3 points; Senate 90.9%,
+toss-ups 71.4%, error 6.5. On races that had polls (2012–2022), polls take
 House winner accuracy 80.1% → 83.9% and error 9.3 → 5.6 points; in the Senate
-they cut error 7.7 → 7.1 and log loss 0.293 → 0.215 but do not improve who
-wins (90.0% → 89.4%). Compared with the earlier 2026.21 on the same corrected
+they cut error 6.8 → 6.3 and log loss 0.282 → 0.205 but do not improve who
+wins (91.1% → 90.5%). Compared with the earlier 2026.21 on the same corrected
 data: House toss-ups 72.3% → 75.1%, log loss 0.207 → 0.183; Senate log loss
-0.241 → 0.212 with winner accuracy flat. Without polls the size of a national
-wave is what the model cannot see; the simulation's national-shock term
-(±6.8 House / ±6.1 Senate margin points, from past cycle-level misses) carries
-that uncertainty. Per-race weights fitted to each result were NOT used: they
-would make every backtest look perfect and say nothing about 2026.
+0.241 → 0.202 with winner accuracy 90.5% → 90.9%. Races that were not
+Democrat-vs-Republican contests (Alaska 2010/2016/2022, Lieberman vs Lamont,
+Louisiana's same-party runoffs) are excluded from learning and grading. Without
+polls the size of a national wave is what the model cannot see; the
+simulation's national-shock term (±6.8 House / ±6.1 Senate margin points, from
+past cycle-level misses) carries that uncertainty. Per-race weights fitted to
+each result were NOT used: they would make every backtest look perfect and say
+nothing about 2026. A Maine-specific adjustment was tested in its general form
+(a senator's own persistent over/under-performance) and has no carry-over
+(slope 0.05 across 131 senator pairs), so none was added; Maine's one 2020 miss
+is a polling miss.
 
 **Release gates:** a run refuses to publish unless every race has
 presidential partisanship on its current lines and ≥95% have a known ballot

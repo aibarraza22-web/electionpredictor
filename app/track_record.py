@@ -58,6 +58,17 @@ MIN_TRAINING_ROWS = 200
 CLOSE_RACE = 20.0           # |actual margin| below this = a race worth calling
 COMPETITIVE_PREDICTION = 25.0
 Y_CLIP = 40.0               # blowouts carry no information about close races
+# Do not crown a "best system" on a handful of races: with fewer past close races
+# than this the chamber uses the average of all five systems. The Senate's first
+# replayed cycle (2012) had ~20 close races to judge, picked "seat history", and
+# predicted Maine R+35 from Snowe's 56-point blowout. Held-out Senate, 2012-24:
+# winner accuracy 90.1% -> 91.0%, log loss 0.212 -> 0.198, error 7.2 -> 6.5
+# points; identical at thresholds 40, 60 and 100; the House (hundreds of close
+# races) is unaffected.
+MIN_RANKING_CLOSE_RACES = 60
+CALIBRATION_TOLERANCE = 0.01   # held-out log loss; see TrackRecordModel._decide_calibration
+CALIBRATION_MIN_SLOPE = 1.5    # z-slope of the calibrated odds; 1.0 would mean raw odds are right
+PRIOR_BOUND = 50.0          # a seat's last margin is clipped to +/- this as a feature
 UNCONTESTED = 99.0          # |margin| at/above this: one major party absent
 L2 = 4.0
 LOCAL_ELECTIONS = 3         # "the past three elections here"
@@ -97,8 +108,8 @@ CANDIDATES = list(SYSTEMS) + [ENSEMBLE]
 # candidates' on those same races (see rank_polled). Full replay 2012-2022 on
 # the races that had polls: House winner accuracy 80.1% -> 83.9%, toss-ups
 # 65.7% -> 71.2%, error 9.3 -> 5.6 points, log loss 0.471 -> 0.337; Senate
-# error 7.7 -> 7.1 and log loss 0.293 -> 0.215, but winner accuracy 90.0% ->
-# 89.4% and toss-ups 73.7% -> 71.9% -- in the Senate polls sharpen margins and
+# error 6.8 -> 6.3 and log loss 0.282 -> 0.205, but winner accuracy 91.1% ->
+# 90.5% and toss-ups 73.7% -> 71.9% -- in the Senate polls sharpen margins and
 # probabilities, not who wins.
 POLL_LAYER = "with_polls"
 LAYER_SYSTEMS: dict[str, dict] = {
@@ -112,9 +123,9 @@ MIN_POLL_TRAINING_ROWS = 60
 # Counting the poll average n/(n+2) of the way (one poll a third, ten polls
 # 83%) so a single poll cannot swing a race. Versus counting it in full, the full
 # replay (2012-24) ties on winner accuracy in both chambers (House 94.0% ->
-# 93.9%, Senate 90.1% both) and is better on log loss (House 0.1833 -> 0.1826,
-# Senate 0.2277 -> 0.2120) and Senate 80% interval coverage (76.9% -> 79.0%),
-# at a slightly larger Senate error (7.1 -> 7.2 points). Even ONE unshrunk poll
+# 93.9%, Senate 90.9% both) and is better on log loss (House 0.1836 -> 0.1828,
+# Senate 0.2136 -> 0.2022) and Senate 80% interval coverage (79.2% -> 81.7%),
+# at a slightly larger Senate error (6.4 -> 6.5 points). Even ONE unshrunk poll
 # beat no poll in the earlier test (House polled-race error 8.0 -> 5.5), so
 # one-poll races are not excluded -- just weighted by how much polling there is.
 POLL_SHRINK = 2.0
@@ -182,10 +193,10 @@ def vector(row: SeatRow, features: list[str]) -> tuple[list[str], list[float]]:
     inc = row.inc if row.inc is not None else 0.0
     if "prior" in features:
         names += ["prior", "has_prior"]
-        x += [clip(row.prior) if has_prior else 0.0, float(has_prior)]
+        x += [clip(row.prior, PRIOR_BOUND) if has_prior else 0.0, float(has_prior)]
     if "stale" in features:
         names += ["stale", "has_stale"]
-        x += [clip(row.stale_prior) if row.stale_prior is not None else 0.0,
+        x += [clip(row.stale_prior, PRIOR_BOUND) if row.stale_prior is not None else 0.0,
               float(row.stale_prior is not None)]
     if "pvi" in features:
         names += ["pvi", "has_pvi"]
@@ -198,7 +209,7 @@ def vector(row: SeatRow, features: list[str]) -> tuple[list[str], list[float]]:
         x.append(inc)
     if "open_x_prior" in features:  # an open seat inherits less of its last margin
         names.append("open_x_prior")
-        x.append((clip(row.prior) if has_prior else 0.0) * (1.0 if inc == 0 else 0.0))
+        x.append((clip(row.prior, PRIOR_BOUND) if has_prior else 0.0) * (1.0 if inc == 0 else 0.0))
     if "poll" in features:
         names.append("poll")
         # a lone poll is far noisier than an average of many: the average counts
@@ -454,7 +465,7 @@ def _close_record(records: list[Scored], system: str) -> tuple[float, float, int
 def rank_systems(records: list[Scored]) -> list[str]:
     """Candidates ordered by close-race winner record (ties: lower squared
     error). With no record yet, the ensemble first -- no choice is made."""
-    if not records:
+    if len([r for r in records if abs(r.y) < CLOSE_RACE]) < MIN_RANKING_CLOSE_RACES:
         return [ENSEMBLE] + list(SYSTEMS)
     return sorted(CANDIDATES, key=lambda c: (-round(_close_record(records, c)[0], 3),
                                               _close_record(records, c)[1]))
@@ -781,15 +792,18 @@ class TrackRecordModel:
         """Should win probabilities be calibrated on past outcomes?
 
         Replayed walk-forward: each held-out cycle is calibrated on the
-        published rows of the cycles before it. Adopted when that lowers mean
-        held-out log loss. An earlier rule also demanded "better in most
-        cycles"; with polls in the model that flipped the Senate to "not
-        adopted" on a 0.003 difference and swung Democratic Senate control by
-        16 points, because raw odds give safe seats a 5-15% upset chance. The
-        reason to calibrate is direct and large: among held-out races whose
-        raw underdog odds were <=30%, raw odds expected 171 upsets in the House
-        and 12 in the Senate; 72 and 4 happened. Returns rows carrying the
-        probability the decided procedure would have published."""
+        published rows of the cycles before it. Adopted when (1) that is no
+        worse than the raw odds by more than CALIBRATION_TOLERANCE of mean
+        held-out log loss -- a practical tie -- and (2) the slope fitted on all
+        replayed rows shows the raw odds are clearly underconfident. Rules that
+        flipped on a 0.003-0.004 difference ("better in most cycles", then
+        "strictly lower log loss") swung Democratic Senate control by 16 points,
+        because early held-out fits rest on a few dozen Senate races while the
+        reliability evidence is large and stable: among held-out races whose raw
+        underdog odds were <=30%, raw odds expected 170 upsets in the House and
+        14 in the Senate; 72 and 4 happened, and the calibrated odds expect 85
+        and 6. Returns rows carrying the probability the decided procedure would
+        have published."""
         cycles = sorted(by_cycle)
         raw, calibrated, fitted_on = {}, {}, {}
         for cycle in cycles:
@@ -801,17 +815,20 @@ class TrackRecordModel:
                 fitted_on[cycle] = len(past)
         judged = sorted(calibrated)
         better = [c for c in judged if _log_loss(calibrated[c]) < _log_loss(raw[c])]
-        adopt = bool(judged) and (
-            fmean(_log_loss(calibrated[c]) for c in judged) <= fmean(_log_loss(raw[c]) for c in judged))
         everything = [r for c in cycles for r in by_cycle[c]]
-        self.calibration = fit_calibration(everything) if adopt else None
+        full_fit = fit_calibration(everything)
+        adopt = bool(judged) and full_fit is not None and full_fit[1] >= CALIBRATION_MIN_SLOPE and (
+            fmean(_log_loss(calibrated[c]) for c in judged)
+            <= fmean(_log_loss(raw[c]) for c in judged) + CALIBRATION_TOLERANCE)
+        self.calibration = full_fit if adopt else None
         self.calibration_decision = {
             "adopted": adopt, "cycles_judged": judged,
             "cycles_better": better,
             "log_loss_raw": {str(c): round(_log_loss(raw[c]), 4) for c in judged},
             "log_loss_calibrated": {str(c): round(_log_loss(calibrated[c]), 4) for c in judged},
             "fit": [round(v, 4) for v in self.calibration] if self.calibration else None,
-            "rule": "adopt when it lowers mean held-out log loss"}
+            "rule": f"adopt when within {CALIBRATION_TOLERANCE} of raw held-out log loss and the "
+                    f"fitted slope is at least {CALIBRATION_MIN_SLOPE} (raw odds underconfident)"}
         out = {}
         for cycle in cycles:
             probs = calibrated[cycle] if adopt and cycle in calibrated else raw[cycle]

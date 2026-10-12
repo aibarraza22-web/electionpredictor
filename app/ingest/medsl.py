@@ -158,10 +158,19 @@ def parse(payload: bytes, chamber: str) -> list[dict]:
         if margin is None:
             continue  # neither major party fielded a candidate: no two-party margin
         total = tally["D"] + tally["R"]
+        dem_pct, rep_pct = tally["D"] / total * 100.0, tally["R"] / total * 100.0
+        if not tally["comparable"]:
+            # Not a Democrat-vs-Republican contest (same-party top two, or third
+            # parties took >30%): record it the way an uncontested race is, so no
+            # model learns from or is graded on a margin that is not a partisan
+            # margin. The real winner's side is kept.
+            side = tally["top_side"] or ("D" if margin > 0 else "R")
+            margin = 100.0 if side == "D" else -100.0
+            dem_pct, rep_pct = (100.0, 0.0) if side == "D" else (0.0, 100.0)
         rows.append({
             "cycle": year, "chamber": chamber, "state": state, "district": district,
             "seat_key": seat_key,
-            "dem_pct": tally["D"] / total * 100.0, "rep_pct": tally["R"] / total * 100.0,
+            "dem_pct": dem_pct, "rep_pct": rep_pct,
             "dem_margin": margin,
             # who actually won, by the same side-assignment as the margin
             "winner_party": tally["top_side"] or ("D" if margin > 0 else "R"),

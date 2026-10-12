@@ -406,3 +406,44 @@ def test_votehub_rejects_multi_candidate_polls():
             "sample_size": 800, "population": "lv",
             "answers": [{"choice": "Mary Peltola", "pct": 48.4}, {"choice": "Miller", "pct": 2.7}]}
     assert votehub._normalize(poll, index) is None
+
+
+# --- races that are not a Democrat-vs-Republican contest (Alaska) -------------------------
+
+def test_same_party_finals_and_vote_split_races_are_not_partisan_margins():
+    """Alaska 2022 (Murkowski vs Tshibaka, both Republicans, Democrat at 11%) read
+    'R+78'; Alaska 2016 (a Libertarian at 29%, an independent at 13%) read 'R+58'."""
+    ak22 = _tally(2022, "AK", [("MURKOWSKI, LISA", 114118, ("",)), ("TSHIBAKA, KELLY C.", 112101, ("",)),
+                               ("CHESBRO, PATRICIA R.", 28233, ("",)), ("KELLEY, BUZZ A.", 8575, ("",))])
+    assert ak22["top_side"] == "R" and ak22["comparable"] is False
+    ak16 = _tally(2016, "AK", [("LISA MURKOWSKI", 138149, ("REPUBLICAN",)), ("JOE MILLER", 90825, ("LIBERTARIAN",)),
+                               ("MARGARET STOCK", 41194, ("INDEPENDENT",)), ("RAY METCALFE", 36200, ("DEMOCRAT",))])
+    assert ak16["comparable"] is False
+    # ordinary races are untouched: a normal two-way race, and Maine 2018 with King
+    assert _tally(2020, "AK", [("DAN SULLIVAN", 191112, ("REPUBLICAN",)), ("AL GROSS", 146068, ("DEMOCRAT",)),
+                               ("JOHN WAYNE HOWE", 16597, ("ALASKAN INDEPENDENCE",))])["comparable"] is True
+    assert _tally(2018, "ME", [("ANGUS S. KING, JR.", 344575, ("INDEPENDENT",)), ("ERIC L. BRAKEY", 223502, ("REPUBLICAN",)),
+                               ("ZAK RINGELSTEIN", 66268, ("DEMOCRAT",))])["comparable"] is True
+
+
+def test_non_comparable_races_are_stored_like_uncontested_ones_with_the_real_winner():
+    from app.ingest import medsl
+    senate = {(r["cycle"], r["seat_key"]): r for r in
+              medsl.parse(medsl.BUNDLED_SENATE_FILE.read_bytes(), "senate")}
+    for cycle in (2010, 2016, 2022):
+        row = senate[(cycle, "senate-AK")]
+        assert row["dem_margin"] == -100.0 and row["winner_party"] == "R"   # excluded from learning
+    assert -20 < senate[(2020, "senate-AK")]["dem_margin"] < -5             # a real race stays real
+    assert senate[(2014, "senate-AK")]["dem_margin"] > -5
+
+
+def test_no_best_system_is_crowned_on_a_handful_of_races():
+    few = [tr.Scored(2010, f"senate-S{i}", "AA", 3.0, {c: 1.0 for c in tr.CANDIDATES}) for i in range(10)]
+    assert tr.rank_systems(few)[0] == tr.ENSEMBLE
+    # with enough close races the record decides: make one system right and the rest wrong
+    many = []
+    for i in range(80):
+        preds = {c: -2.0 for c in tr.CANDIDATES}
+        preds["pvi_inc"] = 2.0
+        many.append(tr.Scored(2012, f"house-AA-{i:02d}", "AA", 3.0, preds))
+    assert tr.rank_systems(many)[0] == "pvi_inc"

@@ -273,14 +273,17 @@ def test_states_that_enacted_new_2026_maps_are_all_registered():
     toss-up off Steve Cohen's pre-split D+48 Memphis prior while all ten
     handicappers rated the seat Republican.
     """
-    enacted = {"AL", "CA", "FL", "LA", "MO", "NC", "OH", "TN", "TX", "UT"}
+    # The nine states whose new map is in effect for 2026 (2025-26 redistricting
+    # article, Sept 2026). Missouri's was blocked by a referendum, Virginia's was
+    # struck down, and Indiana, Kansas, Maryland, Wisconsin, ... never changed.
+    enacted = {"AL", "CA", "FL", "LA", "NC", "OH", "TN", "TX", "UT"}
     for state in enacted:
         assert current_map_cycle(state) == 2026, state
         # A 2024 result predates the 2026 map, so it must read as stale.
         assert prior_is_stale(state, 2024, 2026) is True, state
         assert state in NET_DEM_SEAT_SHIFT, state
     # A state that left its districts in place keeps the post-census baseline.
-    for state in ("AR", "IN", "KS", "MD", "NY", "SC"):
+    for state in ("AR", "IN", "KS", "MD", "MO", "NY", "SC", "VA", "WI"):
         assert current_map_cycle(state) == 2022, state
         assert prior_is_stale(state, 2024, 2026) is False, state
 

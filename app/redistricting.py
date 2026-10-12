@@ -45,11 +45,15 @@ MIDDECADE_REMAP_CYCLE: dict[str, int] = {
     # congressional map for 2026 in response; 2024 results are on the prior
     # citizen-commission lines.
     "CA": 2026,
-    # Missouri's legislature passed a new GOP-drawn map (targeting the KC-area
-    # 5th district); upheld as constitutional by the Missouri Supreme Court
-    # (May 2026) and, as of this writing, in effect for 2026 despite an
-    # ongoing referendum-suspension fight. 2024 results are on the prior lines.
-    "MO": 2026,
+    # Missouri is deliberately ABSENT. Its legislature passed a GOP-drawn map
+    # (Sept 2025, targeting the KC-area 5th), but the referendum on it kept the
+    # 2022 map in place: the 2025-26 redistricting article (as of Sept 25, 2026)
+    # lists plans in effect for 2026 as AL, CA, FL, LA, NC, OH, TN, TX and UT and
+    # puts Missouri under "unsuccessfully attempted". Cook's own 2026 PVI agrees:
+    # every Missouri district moved only 1-3 points against 2024 and Kansas
+    # City's MO-05 is still D+12, where the states that did redraw moved
+    # districts by 6-35 points. An earlier version listed MO as redrawn, which
+    # stripped its eight seats of their same-map history.
     # North Carolina's legislature passed a new GOP-drawn map in Oct 2025; a
     # federal three-judge panel allowed it to be used for the 2026 midterms
     # (ruling Nov 26, 2025). 2024 results are on the 2023 lines.
@@ -189,7 +193,6 @@ NET_DEM_SEAT_SHIFT: dict[str, int] = {
     "TX": -5,  # 25R-13D -> ~30R-8D; SCOTUS allowed the map (NPR, Dec 4 2025)
     "FL": -4,  # 20R-8D -> 24R-4D; enacted map (NBC/NPR, Apr 29 2026)
     "OH": -2,  # 10R-5D -> 12R-3D commission map (Oct 31 2025)
-    "MO": -1,  # dismantled the KC-area 5th (Cleaver) district
     "NC": -1,  # weakened the 1st (Davis) district
     "LA": -1,  # Callais eliminated the 2nd majority-Black (D) district
     "TN": -1,  # -1 D / +1 R on the enacted map: the Memphis 9th is split

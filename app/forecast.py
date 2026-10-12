@@ -910,6 +910,12 @@ RESEARCH_CLAIMS.extend([
                   "(worse at every shrinkage, both chambers); seat history added to "
                   "presidential lean + incumbency (no gain, Senate slightly worse); "
                   "incumbency x partisanship / environment interactions (worse log loss); "
+                  "a weaker incumbency edge in redrawn seats (the edge was only ~2 points smaller "
+                  "in the 541 redrawn seats of 2016-24, 403 of them in 2022 when almost every "
+                  "district changed, and adding the term made held-out log loss worse, 0.1585 "
+                  "-> 0.1659 -- caveat: the 2025-26 redraws targeted specific incumbents in a "
+                  "way 2022's mostly did not, which history cannot test, so seats like OH-09 and "
+                  "NC-01 stay model-vs-handicapper disagreements); "
                   "Senate personal vote (error worse in 2 of 4 cycles); campaign fundraising "
                   "(no gain in the Senate, a small House gain even though the FEC totals used "
                   "include money that follows winners -- a leaky test that can only flatter "
@@ -967,6 +973,27 @@ RESEARCH_CLAIMS.extend([
                  "overwrites stored rows instead of being ignored as duplicates. The race "
                  "page now names each past winner and any independent who won.",
      "source": "User: Maine 2018 and 2024 show R+54 / R+52 -- Maine did not go Republican"},
+])
+
+RESEARCH_CLAIMS.extend([
+    {"id": "D-005",
+     "claim": "FIXED: Missouri was treated as redrawn for 2026, but its new map never took effect.",
+     "chamber": "house", "metric": "redistricting status vs sources",
+     "mechanism": "The 2025-26 redistricting article (as of Sept 25, 2026) lists plans in effect for "
+                  "2026 as Alabama, California, Florida, Louisiana, North Carolina, Ohio, "
+                  "Tennessee, Texas and Utah, and puts Missouri under 'unsuccessfully attempted' "
+                  "(the referendum kept the 2022 map). Cook's own 2026 PVI agrees: every Missouri "
+                  "district moved 1-3 points against 2024 and Kansas City's MO-05 is still D+12, "
+                  "where redrawn states moved districts by 6-35 points. Treating Missouri as "
+                  "redrawn stripped its eight seats of same-map history and the House personal-"
+                  "vote term. Georgia (2024 map, litigation unresolved) and Virginia (voter-"
+                  "approved map struck down) correctly stay off the 2026 list.",
+     "status": "Production",
+     "validation": "Redrawn seats 181 -> 173; Missouri seats now carry their 2024 result and "
+                   "records. Maps changed between 2022 and 2024 (AL, GA, LA, NC, NY) and for "
+                   "2026 (9 states) match the source.",
+     "decision": "redistricting.MIDDECADE_REMAP_CYCLE and NET_DEM_SEAT_SHIFT no longer list MO.",
+     "source": "User: did you account for new redistricted lines since 2022?"},
 ])
 
 # Claims whose mechanism the track-record model (T-004) no longer publishes. Kept

@@ -1,11 +1,12 @@
 # Model card
 
-**Model version:** 2026.21 — poll-free track-record model
-(`app/track_record.py`): five ridge systems over certified results, Cook PVI on
-current lines, incumbency and the national midterm pattern; each chamber
-publishes the system with the best out-of-sample close-race record, with
-per-race uncertainty sized by the seat's and state's own past misses. No polls,
-no expert ratings, no campaign layer.
+**Model version:** 2026.22 — track-record model (`app/track_record.py`):
+five ridge systems over certified results, Cook PVI on current lines,
+incumbency and the national midterm pattern; each chamber publishes the system
+with the best out-of-sample close-race record, per-race uncertainty is sized by
+the seat's and state's own past misses, **polls are a layer used only on races
+that have them**, and House incumbents carry part of their personal vote
+forward. No expert ratings, no campaign layer.
 
 **Use:** research, transparent forecast workflow development, and public
 forecast presentation with the provenance caveats below surfaced by
@@ -19,15 +20,19 @@ counts are stored with each fit in `model_versions.coefficients`.
 and after controlled methodology changes. Frequent data-only refreshes reuse
 the last validated model. Metrics live in `/api/backtests`, never in prose.
 
-**Validation (2026.21):** the whole procedure is replayed per held-out cycle
-2012–2024 using only earlier cycles. Against the previous polls + ratings
-model on the same races (2014–2024): House 94.8% vs 94.5% of races called,
-toss-ups 74.0% vs 74.5%, but a larger seat-total miss in wave years (mean 14.0
-vs 11.8 seats; 2018: −37 vs −26); Senate 91.1% vs 92.1%, toss-ups 70.7% vs
-72.4%, seat-total miss 2.3 vs 2.7. Without polls the size of a national wave
-is the main thing the model cannot see; the simulation's national-shock term
+**Validation (2026.22):** the whole procedure is replayed per held-out cycle
+2012–2024 using only earlier cycles. All races: House 93.9% called, toss-ups
+(decided by <10 points) 75.1%, average error 7.3 points; Senate 90.1%,
+toss-ups 71.4%, error 7.2. On races that had polls (2012–2022), polls take
+House winner accuracy 80.1% → 83.9% and error 9.3 → 5.6 points; in the Senate
+they cut error 7.7 → 7.1 and log loss 0.293 → 0.215 but do not improve who
+wins (90.0% → 89.4%). Compared with the earlier 2026.21 on the same corrected
+data: House toss-ups 72.3% → 75.1%, log loss 0.207 → 0.183; Senate log loss
+0.241 → 0.212 with winner accuracy flat. Without polls the size of a national
+wave is what the model cannot see; the simulation's national-shock term
 (±6.8 House / ±6.1 Senate margin points, from past cycle-level misses) carries
-that uncertainty.
+that uncertainty. Per-race weights fitted to each result were NOT used: they
+would make every backtest look perfect and say nothing about 2026.
 
 **Release gates:** a run refuses to publish unless every race has
 presidential partisanship on its current lines and ≥95% have a known ballot
@@ -38,8 +43,8 @@ served at `/api/data-health`.
 
 **Known weaknesses:**
 
-* (2026.21) Without polls the model knows only the *average* midterm swing,
-  not this year's. It rates 12 Republican-held swing seats (e.g. PA-07,
+* (2026.22) On races without polls the model knows only the *average* midterm
+  swing, not this year's. It rates 12 Republican-held swing seats (e.g. PA-07,
   NY-17, CO-08, IA-01) Republican where handicappers lean Democratic; these
   disagreements are published at `/api/data-health`
   (`model_vs_consensus_sign_conflicts`) rather than reconciled.

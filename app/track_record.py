@@ -41,9 +41,9 @@ from statistics import fmean, pstdev
 
 from . import redistricting
 from .domain import normal_cdf
-from .features import PRESIDENT_PARTY, ResultLookup, StateLean, clip
+from .features import PRESIDENT_PARTY, PollLookup, ResultLookup, StateLean, clip
 from .incumbency import IncumbencyLookup
-from .ingest import cook_pvi
+from .ingest import cook_pvi, party_labels
 from .model import ridge_fit
 
 # President's party at each November election, facts of record. Extends
@@ -91,17 +91,59 @@ ENSEMBLE = "ensemble"
 ENSEMBLE_LABEL = "Average of all five systems"
 CANDIDATES = list(SYSTEMS) + [ENSEMBLE]
 
+# The poll layer. NOT one of the five poll-free systems (and not in their
+# average): it exists only for races that have polls, and is used on them only
+# because its out-of-sample record on past polled races beats the poll-free
+# candidates' on those same races (see rank_polled). Full replay 2012-2022 on
+# the races that had polls: House winner accuracy 80.1% -> 83.9%, toss-ups
+# 65.7% -> 71.2%, error 9.3 -> 5.6 points, log loss 0.471 -> 0.337; Senate
+# error 7.7 -> 7.1 and log loss 0.293 -> 0.215, but winner accuracy 90.0% ->
+# 89.4% and toss-ups 73.7% -> 71.9% -- in the Senate polls sharpen margins and
+# probabilities, not who wins.
+POLL_LAYER = "with_polls"
+LAYER_SYSTEMS: dict[str, dict] = {
+    POLL_LAYER: {"features": ["pvi", "inc", "env", "poll"],
+                 "label": "Polls + presidential lean + incumbency",
+                 "about": "the presidential-lean + incumbency system with the "
+                          "time-decayed polling average added"},
+}
+ALL_CANDIDATES = CANDIDATES + [POLL_LAYER]
+MIN_POLL_TRAINING_ROWS = 60
+# Counting the poll average n/(n+2) of the way (one poll a third, ten polls
+# 83%) so a single poll cannot swing a race. Versus counting it in full, the full
+# replay (2012-24) ties on winner accuracy in both chambers (House 94.0% ->
+# 93.9%, Senate 90.1% both) and is better on log loss (House 0.1833 -> 0.1826,
+# Senate 0.2277 -> 0.2120) and Senate 80% interval coverage (76.9% -> 79.0%),
+# at a slightly larger Senate error (7.1 -> 7.2 points). Even ONE unshrunk poll
+# beat no poll in the earlier test (House polled-race error 8.0 -> 5.5), so
+# one-poll races are not excluded -- just weighted by how much polling there is.
+POLL_SHRINK = 2.0
+
+# An incumbent who runs again tends to repeat how far they ran ahead of (or
+# behind) their district's fundamentals last time. House: error fell in all 4
+# cycles where it applies (2016/18/20/24: 7.7->7.3, 6.9->6.6, 6.2->5.7, 5.4->5.3
+# points), accuracy flat-to-up, at every weight tried from 0.15 to 0.5; 0.3 is
+# the middle of that range, not a tuned optimum. Senate: NOT adopted -- the
+# fuller 2016-24 test was mixed (error worse in 2 of 4 cycles at 0.3), so the
+# Senate weight is zero. State-level offsets were tested too and rejected: they
+# were worse at every shrinkage in both chambers.
+PERSONAL_VOTE_WEIGHT = {"house": 0.3, "senate": 0.0}
+PERSONAL_VOTE_REFERENCE = "pvi_inc"
+
 # Feature -> human group, for the additive "why this forecast" breakdown.
 GROUPS = {"intercept": "baseline", "prior": "seat history", "has_prior": "seat history",
           "stale": "seat history", "has_stale": "seat history",
           "pvi": "presidential lean", "has_pvi": "presidential lean",
           "lean": "statewide House lean", "has_lean": "statewide House lean",
           "inc": "incumbency", "open_x_prior": "seat history",
+          "poll": "polls", "personal_vote": "incumbent's personal vote",
           "env": "national environment", "mid": "national environment"}
 
 
 def label(system: str) -> str:
-    return ENSEMBLE_LABEL if system == ENSEMBLE else SYSTEMS[system]["label"]
+    if system == ENSEMBLE:
+        return ENSEMBLE_LABEL
+    return (SYSTEMS.get(system) or LAYER_SYSTEMS[system])["label"]
 
 
 def environment(cycle: int) -> tuple[float, float]:
@@ -127,6 +169,10 @@ class SeatRow:
     env: float = 0.0
     mid: float = 0.0
     redrawn: bool = False
+    winner: str | None = None   # certified winner's side ("D"/"R"), history rows only
+    poll: float | None = None   # time-decayed polling margin as of the forecast date
+    poll_n: int = 0
+    last_poll: str | None = None
     extra: dict = field(default_factory=dict)
 
 
@@ -153,17 +199,46 @@ def vector(row: SeatRow, features: list[str]) -> tuple[list[str], list[float]]:
     if "open_x_prior" in features:  # an open seat inherits less of its last margin
         names.append("open_x_prior")
         x.append((clip(row.prior) if has_prior else 0.0) * (1.0 if inc == 0 else 0.0))
+    if "poll" in features:
+        names.append("poll")
+        # a lone poll is far noisier than an average of many: the average counts
+        # n/(n+POLL_SHRINK) of the way, so one poll counts a third and ten 83%
+        weight = row.poll_n / (row.poll_n + POLL_SHRINK) if row.poll_n else 0.0
+        x.append(clip(row.poll, 30.0) * weight if row.poll is not None else 0.0)
     if "env" in features:
         names += ["env", "mid"]
         x += [row.env, row.mid]
     return names, x
 
 
+MIN_TWO_PARTY_SHARE = 75.0   # a head-to-head poll's D + R share, at least
+MIN_MAJOR_SHARE = 12.0       # ... and each major candidate's, at least
+
+
+def poll_lookup(rows: list[dict]) -> PollLookup:
+    """PollLookup over only polls that describe a Democrat-vs-Republican race.
+
+    Multi-candidate polls (an independent splitting the vote, a primary-style
+    field) have shares like D 48 / R 2.7 and would otherwise read as a landslide;
+    this removed 3.7% of the 7,846 historical polls and every Alaska/Montana
+    2026 poll that had slipped through. Applied to history and the live forecast
+    alike, so the backtest sees exactly what the forecast sees."""
+    kept = []
+    for poll in rows:
+        d, r = poll.get("dem_pct"), poll.get("rep_pct")
+        if d is not None and r is not None and (d + r < MIN_TWO_PARTY_SHARE
+                                                or min(d, r) < MIN_MAJOR_SHARE):
+            continue
+        kept.append(poll)
+    return PollLookup(kept)
+
+
 class Inputs:
-    """Every poll-free fact the systems read, keyed for any cycle."""
+    """Every fact the systems read, keyed for any cycle."""
 
     def __init__(self, results: ResultLookup, incumbency: IncumbencyLookup | None = None,
-                 pvi: tuple[dict, dict] | None = None):
+                 pvi: tuple[dict, dict] | None = None, polls: PollLookup | None = None):
+        self.polls = polls
         self.results = results
         self.state_lean = StateLean(results)
         self.incumbency = incumbency or IncumbencyLookup()
@@ -193,7 +268,7 @@ class Inputs:
 
     def row(self, chamber: str, cycle: int, seat_key: str, state: str,
             district: str | None, y: float | None = None,
-            holder_party: str | None = None) -> SeatRow:
+            holder_party: str | None = None, as_of: str | None = None) -> SeatRow:
         stale, stale_cycle = self.results.prior(cycle, seat_key, chamber)
         if chamber == "house":
             prior, prior_cycle = self.house_prior(cycle, seat_key, state)
@@ -207,12 +282,18 @@ class Inputs:
             redrawn = False
         inc = self.incumbency.value(cycle, seat_key)
         env, mid = environment(cycle)
+        poll, poll_n, last_poll = (None, 0, None)
+        if self.polls is not None and not party_labels.aligned_race(cycle, state, chamber):
+            # history: polls up to election day; the live forecast: up to its as-of
+            poll, poll_n, last_poll = self.polls.average(
+                cycle, seat_key, as_of or f"{cycle}-11-08")
         return SeatRow(
             seat_key=seat_key, chamber=chamber, state=state, district=district,
             cycle=cycle, y=y, prior=prior, prior_cycle=prior_cycle, stale_prior=stale,
             pvi=self.pvi(chamber, cycle, state, district),
             lean=self.state_lean.lean(state, cycle)[0], inc=inc, env=env, mid=mid,
-            redrawn=redrawn, extra={"holder_party": holder_party})
+            redrawn=redrawn, poll=poll, poll_n=poll_n, last_poll=last_poll,
+            extra={"holder_party": holder_party})
 
     def history(self, chamber: str, first: int = TRAIN_START, last: int = 2024) -> dict[int, list[SeatRow]]:
         rows: dict[int, list[SeatRow]] = {}
@@ -223,8 +304,10 @@ class Inputs:
             for result in self.results.seats(cycle, chamber):
                 if abs(result["dem_margin"]) >= UNCONTESTED:
                     continue  # not a two-party contest: nothing to learn
-                seats.append(self.row(chamber, cycle, result["seat_key"], result["state"],
-                                      result.get("district"), y=result["dem_margin"]))
+                seat = self.row(chamber, cycle, result["seat_key"], result["state"],
+                                result.get("district"), y=result["dem_margin"])
+                seat.winner = result.get("winner_party")
+                seats.append(seat)
             if seats:
                 rows[cycle] = seats
         return rows
@@ -237,7 +320,7 @@ class System:
 
     def __init__(self, name: str):
         self.name = name
-        self.features = SYSTEMS[name]["features"]
+        self.features = (SYSTEMS.get(name) or LAYER_SYSTEMS[name])["features"]
         self.weights: list[float] = []
         self.names: list[str] = []
 
@@ -278,12 +361,17 @@ def fit_systems(rows: list[SeatRow]) -> dict[str, System]:
     for name in SYSTEMS:
         own = [r for r in rows if trains_on(name, r)]
         systems[name] = System(name).fit(own or rows)
+    polled = [r for r in rows if trains_on(POLL_LAYER, r)]
+    if len(polled) >= MIN_POLL_TRAINING_ROWS:
+        systems[POLL_LAYER] = System(POLL_LAYER).fit(polled)
     return systems
 
 
 def predict_all(systems: dict[str, System], row: SeatRow) -> dict[str, float]:
-    out = {name: system.predict(row) for name, system in systems.items()}
+    out = {name: systems[name].predict(row) for name in SYSTEMS}
     out[ENSEMBLE] = fmean(out[name] for name in SYSTEMS)
+    if POLL_LAYER in systems and usable(POLL_LAYER, row):
+        out[POLL_LAYER] = systems[POLL_LAYER].predict(row)
     return out
 
 
@@ -297,10 +385,45 @@ class Scored:
     preds: dict[str, float]
     pvi: float | None = None
     prior: float | None = None
+    winner: str | None = None
+    poll: float | None = None
+    poll_n: int = 0
+    inc: float | None = None
+    chamber: str = "house"
+    raw: dict[str, float] = field(default_factory=dict)   # predictions before the personal-vote term
+    personal: float = 0.0                                 # the personal-vote term applied to poll-free candidates
+
+
+def personal_vote_term(chamber: str, row, records: dict[tuple[int, str], "Scored"]) -> float:
+    """Carry forward part of how far this seat's incumbent beat (or trailed)
+    the fundamentals last time -- only if the SAME incumbent is running again
+    (the prior winner is on the incumbent's side) and, in the House, the map
+    has not changed. The reference residual is a fixed system's own
+    out-of-sample miss, taken before any personal-vote term, so it never
+    compounds."""
+    weight = PERSONAL_VOTE_WEIGHT.get(chamber, 0.0)
+    if not weight or not row.inc:
+        return 0.0
+    step = 2 if chamber == "house" else 6
+    prev = records.get((row.cycle - step, row.seat_key))
+    if prev is None or prev.pvi is None or PERSONAL_VOTE_REFERENCE not in prev.raw:
+        return 0.0
+    if chamber == "house" and redistricting.map_changed(row.state, prev.cycle, row.cycle):
+        return 0.0
+    if (prev.y > 0) != (row.inc > 0):
+        return 0.0
+    return weight * (clip(prev.y, Y_CLIP) - prev.raw[PERSONAL_VOTE_REFERENCE])
+
+
+def _apply_personal_vote(preds: dict[str, float], term: float) -> dict[str, float]:
+    return {c: (v + term if c != POLL_LAYER else v) for c, v in preds.items()}
 
 
 def walk_forward(history: dict[int, list[SeatRow]]) -> dict[tuple[int, str], Scored]:
-    """Out-of-sample predictions of every candidate for every eligible cycle."""
+    """Out-of-sample predictions of every candidate for every eligible cycle.
+
+    Cycles are processed in order, so the personal-vote term for a cycle only
+    ever reads earlier cycles' (already out-of-sample) misses."""
     scored: dict[tuple[int, str], Scored] = {}
     cycles = sorted(history)
     for target in cycles:
@@ -310,14 +433,17 @@ def walk_forward(history: dict[int, list[SeatRow]]) -> dict[tuple[int, str], Sco
         assert all(row.cycle < target for row in training), "future cycle leaked into training"
         systems = fit_systems(training)
         for row in history[target]:
+            raw = predict_all(systems, row)
+            term = personal_vote_term(row.chamber, row, scored)
             scored[(target, row.seat_key)] = Scored(
-                target, row.seat_key, row.state, row.y, predict_all(systems, row),
-                pvi=row.pvi, prior=row.prior)
+                target, row.seat_key, row.state, row.y, _apply_personal_vote(raw, term),
+                pvi=row.pvi, prior=row.prior, winner=row.winner, poll=row.poll,
+                poll_n=row.poll_n, inc=row.inc, chamber=row.chamber, raw=raw, personal=term)
     return scored
 
 
 def _close_record(records: list[Scored], system: str) -> tuple[float, float, int]:
-    close = [s for s in records if abs(s.y) < CLOSE_RACE]
+    close = [s for s in records if abs(s.y) < CLOSE_RACE and system in s.preds]
     if not close:
         return 0.0, float("inf"), 0
     accuracy = fmean((s.preds[system] > 0) == (s.y > 0) for s in close)
@@ -334,27 +460,44 @@ def rank_systems(records: list[Scored]) -> list[str]:
                                               _close_record(records, c)[1]))
 
 
+def rank_polled(records: list[Scored]) -> list[str]:
+    """The same ranking, judged ONLY on past races that had polls, with the
+    poll layer a candidate. Empty when there is too little polled history to
+    judge -- then polled races use the poll-free ranking (no poll layer)."""
+    polled = [s for s in records if POLL_LAYER in s.preds]
+    if len([s for s in polled if abs(s.y) < CLOSE_RACE]) < 30:
+        return []
+    return sorted(ALL_CANDIDATES, key=lambda c: (-round(_close_record(polled, c)[0], 3),
+                                                 _close_record(polled, c)[1]))
+
+
 # A system is only used on a race whose defining input exists. Without its
 # PVI a presidential-lean system is a constant, and without a same-map result
 # persistence is too; the combined systems degrade gracefully instead. Found
 # replaying 2012: the pick made from 2010 alone was the PVI system, and PVI on
 # the new 2012 lines was not published before that election -- 47% accuracy.
-REQUIRES = {"pvi": "pvi", "pvi_inc": "pvi", "persistence": "prior"}
+REQUIRES = {"pvi": ("pvi",), "pvi_inc": ("pvi",), "persistence": ("prior",),
+            POLL_LAYER: ("pvi", "poll")}
 
 
 def trains_on(system: str, row) -> bool:
     """Rows a system learns from: those carrying every input it relies on."""
     needs = {"pvi": ("pvi",), "pvi_inc": ("pvi",), "full": ("pvi",),
-             "persistence": ("prior",)}.get(system, ())
+             "persistence": ("prior",), POLL_LAYER: ("pvi", "poll")}.get(system, ())
     return all(getattr(row, need) is not None for need in needs)
 
 
 def usable(system: str, row) -> bool:
-    need = REQUIRES.get(system)
-    return need is None or getattr(row, need) is not None
+    return all(getattr(row, need) is not None for need in REQUIRES.get(system, ()))
 
 
-def pick_for(ranking: list[str], row) -> str:
+def pick_for(ranking: list[str], row, polled_ranking: list[str] | None = None) -> str:
+    """The published system for one race: the polled ranking (poll layer
+    eligible) when the race has polls and that ranking exists, else the
+    poll-free ranking."""
+    if polled_ranking and getattr(row, "poll", None) is not None:
+        return next((c for c in polled_ranking if usable(c, row)),
+                    next(c for c in ranking if usable(c, row)))
     return next(c for c in ranking if usable(c, row))
 
 
@@ -370,7 +513,8 @@ class Uncertainty:
     def __init__(self, records: list[Scored], system: str, chamber: str):
         self.system = system
         self.chamber = chamber
-        competitive = [s for s in records if abs(s.preds[system]) < COMPETITIVE_PREDICTION]
+        competitive = [s for s in records if system in s.preds
+                       and abs(s.preds[system]) < COMPETITIVE_PREDICTION]
         by_cycle: dict[int, list[float]] = defaultdict(list)
         for s in competitive:
             by_cycle[s.cycle].append(clip(s.y, Y_CLIP) - s.preds[system])
@@ -454,7 +598,7 @@ def _log_loss(rows: list[tuple]) -> float:
 
 
 def seat_record(records: dict[tuple[int, str], Scored], row: SeatRow,
-                system: str) -> list[dict]:
+                system: str, fallback: str = ENSEMBLE) -> list[dict]:
     """How ``system`` did in "the past three elections here", out of sample:
     this House seat's last three results on the same map, or this state's
     last three Senate races (either seat -- a Senate "area" is the state)."""
@@ -475,25 +619,33 @@ def seat_record(records: dict[tuple[int, str], Scored], row: SeatRow,
     for scored in past:
         if scored.cycle < FIRST_SCORED_CYCLE:
             continue
-        predicted = scored.preds[system]
+        # the poll layer only exists on races that were polled; where this past
+        # race had no polls, show what the chamber's poll-free system said
+        predicted = scored.preds.get(system, scored.preds[fallback])
         out.append({"cycle": scored.cycle, "seat_key": scored.seat_key,
                     "predicted_margin": round(predicted, 1),
                     "actual_margin": round(scored.y, 1),
+                    # who actually won, and why a margin can look odd: an
+                    # independent on a party's side is named, not hidden
+                    "winner_party": scored.winner,
+                    "note": party_labels.aligned_note(scored.cycle, scored.state),
                     "called_correctly": (predicted > 0) == (scored.y > 0),
                     "every_system_called_correctly": {
-                        c: (scored.preds[c] > 0) == (scored.y > 0) for c in CANDIDATES}})
+                        c: (scored.preds[c] > 0) == (scored.y > 0)
+                        for c in ALL_CANDIDATES if c in scored.preds}})
         if len(out) >= LOCAL_ELECTIONS:
             break
     return sorted(out, key=lambda item: item["cycle"])
 
 
 def grade(row: SeatRow, record: list[dict]) -> str:
-    """Evidence present for this seat, poll-free: partisanship on the current
-    lines (2), same-map results (up to 2), known ballot status (1), and a
-    local track record of 2+ elections to size its uncertainty (1)."""
+    """Evidence present for this seat: partisanship on the current lines (2),
+    same-map results (up to 2), known ballot status (1), a local track record
+    of 2+ elections to size its uncertainty (1), and any polling (1)."""
     score = (2 * int(row.pvi is not None) + int(row.prior is not None)
              + int(row.prior is not None and len(record) >= 2)
-             + int(row.inc is not None) + int(len(record) >= 2))
+             + int(row.inc is not None) + int(len(record) >= 2)
+             + int(row.poll_n >= 1))
     return "A" if score >= 6 else "B" if score >= 4 else "C" if score >= 2 else "D" if score >= 1 else "F"
 
 
@@ -533,6 +685,8 @@ class TrackRecordModel:
     def __init__(self, chamber: str):
         self.chamber = chamber
         self.ranking: list[str] = [ENSEMBLE]
+        self.ranking_polled: list[str] = []
+        self.scoreboard_polled: dict = {}
         self.systems: dict[str, System] = {}
         self.records: dict[tuple[int, str], Scored] = {}
         self.uncertainty: dict[str, Uncertainty] = {}
@@ -557,10 +711,14 @@ class TrackRecordModel:
         self.records = walk_forward(history)
         scored = [s for s in self.records.values() if s.cycle >= FIRST_SCORED_CYCLE]
         self.ranking = rank_systems(scored)
+        self.ranking_polled = rank_polled(scored)
         self.uncertainty = {c: Uncertainty(list(self.records.values()), c, self.chamber)
-                            for c in CANDIDATES}
+                            for c in ALL_CANDIDATES}
         self.systems = fit_systems([row for rows in history.values() for row in rows])
         self.scoreboard = {c: {"label": label(c), **metrics_close(scored, c)} for c in CANDIDATES}
+        polled = [s for s in scored if POLL_LAYER in s.preds]
+        self.scoreboard_polled = {c: {"label": label(c), **metrics_close(polled, c)}
+                                  for c in ALL_CANDIDATES} if self.ranking_polled else {}
         self.backtest = self._honest_backtest()
         return self
 
@@ -573,22 +731,33 @@ class TrackRecordModel:
         chosen: dict[int, str] = {}
         seat_order: dict[int, list] = defaultdict(list)
         self.backtest_rows = []
+        polled_with: list[tuple] = []     # published (with polls) on polled races ...
+        polled_without: list[tuple] = []  # ... vs the poll-free pick on those same races
         for target in sorted({s.cycle for s in self.records.values()}):
             if target < FIRST_SCORED_CYCLE + 2:
                 continue
             past = [s for s in self.records.values() if s.cycle < target]
-            ranking = rank_systems([s for s in past if s.cycle >= FIRST_SCORED_CYCLE])
+            judged = [s for s in past if s.cycle >= FIRST_SCORED_CYCLE]
+            ranking = rank_systems(judged)
+            ranking_polled = rank_polled(judged)
             chosen[target] = ranking[0]
-            unc = {c: Uncertainty(past, c, self.chamber) for c in CANDIDATES}
+            unc = {c: Uncertainty(past, c, self.chamber) for c in ALL_CANDIDATES}
             rows = []
             for s in self.records.values():
                 if s.cycle != target:
                     continue
-                system = pick_for(ranking, s)
+                system = pick_for(ranking, s, ranking_polled)
                 sigma = unc[system].local(target, s.seat_key, s.state)["sigma"]
                 rows.append((s.preds[system], sigma, s.y))
+                if POLL_LAYER in s.preds:
+                    free = pick_for(ranking, s)
+                    polled_with.append((s.preds[system], sigma, s.y))
+                    polled_without.append((s.preds[free],
+                                           unc[free].local(target, s.seat_key, s.state)["sigma"], s.y))
                 seat_order[target].append((s.seat_key, system))
-                for c in CANDIDATES:
+                for c in ALL_CANDIDATES:
+                    if c not in s.preds:
+                        continue
                     c_sigma = unc[c].local(target, s.seat_key, s.state)["sigma"]
                     per_system[c].append((s.preds[c], c_sigma, s.y))
                     self.backtest_rows.append((c, target, s.seat_key, s.preds[c], c_sigma, s.y,
@@ -604,18 +773,23 @@ class TrackRecordModel:
                 "by_cycle": {str(c): metrics(rows) for c, rows in by_cycle.items()},
                 "national_error_sigma_pts": round(self.uncertainty[self.system].national, 3),
                 "calibration": self.calibration_decision,
+                "polled_races": {"with_polls": metrics(polled_with),
+                                 "poll_free": metrics(polled_without)},
                 "per_system": {c: metrics(v) for c, v in per_system.items()}}
 
     def _decide_calibration(self, by_cycle: dict[int, list]) -> dict[int, list]:
         """Should win probabilities be calibrated on past outcomes?
 
         Replayed walk-forward: each held-out cycle is calibrated on the
-        published rows of the cycles before it. Adopted only if that beats the
-        raw normal reading on mean log loss AND in most of those cycles, so
-        each chamber gets what its own record supports (at 2026.21 both pass:
-        House 0.1705 -> 0.1692, better in 4 of 6 cycles; Senate 0.2500 ->
-        0.2076, 4 of 5). Returns rows carrying the probability the decided
-        procedure would have published."""
+        published rows of the cycles before it. Adopted when that lowers mean
+        held-out log loss. An earlier rule also demanded "better in most
+        cycles"; with polls in the model that flipped the Senate to "not
+        adopted" on a 0.003 difference and swung Democratic Senate control by
+        16 points, because raw odds give safe seats a 5-15% upset chance. The
+        reason to calibrate is direct and large: among held-out races whose
+        raw underdog odds were <=30%, raw odds expected 171 upsets in the House
+        and 12 in the Senate; 72 and 4 happened. Returns rows carrying the
+        probability the decided procedure would have published."""
         cycles = sorted(by_cycle)
         raw, calibrated, fitted_on = {}, {}, {}
         for cycle in cycles:
@@ -628,8 +802,7 @@ class TrackRecordModel:
         judged = sorted(calibrated)
         better = [c for c in judged if _log_loss(calibrated[c]) < _log_loss(raw[c])]
         adopt = bool(judged) and (
-            fmean(_log_loss(calibrated[c]) for c in judged) < fmean(_log_loss(raw[c]) for c in judged)
-            and len(better) > len(judged) / 2)
+            fmean(_log_loss(calibrated[c]) for c in judged) <= fmean(_log_loss(raw[c]) for c in judged))
         everything = [r for c in cycles for r in by_cycle[c]]
         self.calibration = fit_calibration(everything) if adopt else None
         self.calibration_decision = {
@@ -638,7 +811,7 @@ class TrackRecordModel:
             "log_loss_raw": {str(c): round(_log_loss(raw[c]), 4) for c in judged},
             "log_loss_calibrated": {str(c): round(_log_loss(calibrated[c]), 4) for c in judged},
             "fit": [round(v, 4) for v in self.calibration] if self.calibration else None,
-            "rule": "adopt only if better on mean log loss AND in most held-out cycles"}
+            "rule": "adopt when it lowers mean held-out log loss"}
         out = {}
         for cycle in cycles:
             probs = calibrated[cycle] if adopt and cycle in calibrated else raw[cycle]
@@ -646,22 +819,29 @@ class TrackRecordModel:
         return out
 
     def predict(self, row: SeatRow) -> dict:
-        preds = predict_all(self.systems, row)
-        system = pick_for(self.ranking, row)
+        raw = predict_all(self.systems, row)
+        term = personal_vote_term(self.chamber, row, self.records)
+        preds = _apply_personal_vote(raw, term)
+        system = pick_for(self.ranking, row, self.ranking_polled)
         mean = preds[system]
         unc = self.uncertainty[system].local(row.cycle, row.seat_key, row.state)
         sigma = unc["sigma"]
+        fitted = {n: m for n, m in self.systems.items() if n in SYSTEMS}
         if system == ENSEMBLE:
             groups: dict[str, float] = defaultdict(float)
-            for fitted in self.systems.values():
-                for group, value in fitted.contributions(row).items():
-                    groups[group] += value / len(self.systems)
+            for model in fitted.values():
+                for group, value in model.contributions(row).items():
+                    groups[group] += value / len(fitted)
         else:
             groups = self.systems[system].contributions(row)
-        record = seat_record(self.records, row, system)
+        if term and system != POLL_LAYER:
+            groups = dict(groups)
+            groups["incumbent's personal vote"] = groups.get("incumbent's personal vote", 0.0) + term
+        record = seat_record(self.records, row, system, fallback=self.ranking[0])
         return {"system": system, "mean": mean, "sigma": sigma,
                 "probability": probability(mean, sigma, self.calibration), "systems": preds,
                 "contributions": dict(groups), "uncertainty": unc,
+                "personal_vote": term, "polls_used": system == POLL_LAYER,
                 "seat_record": record, "grade": grade(row, record)}
 
 

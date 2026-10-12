@@ -59,6 +59,8 @@ PRIMARY_SUFFIXES = ("democratic", "republican", "primary")
 # Poll-quality gate. The forecast should lean on independent, reasonably fresh
 # polling of likely/registered voters -- a partisan-sponsored or year-old poll
 # inflates a race's data grade without adding trustworthy signal.
+MIN_TWO_PARTY_SHARE = 75.0   # D + R must be at least this much of the poll
+MIN_MAJOR_SHARE = 12.0       # ... and each must be at least this
 MIN_SAMPLE_SIZE = 300
 MAX_POLL_AGE_DAYS = 365          # a 2026-cycle poll older than this is stale
 ACCEPTED_POPULATIONS = ("lv", "rv")  # likely/registered voters; not "adults"
@@ -275,6 +277,13 @@ def _normalize(poll: dict, party_index: dict | None = None) -> dict | None:
     if not pcts:
         return None
     dem, rep = pcts
+    # A head-to-head poll has both major candidates well above single digits and
+    # together most of the sample. Multi-candidate polls (a top-four primary
+    # field, an independent splitting the vote) fail this: two Alaska polls read
+    # D 48 / R 2.7 because name-matching found a minor Republican, and would have
+    # made Alaska "Safe Democratic".
+    if dem + rep < MIN_TWO_PARTY_SHARE or min(dem, rep) < MIN_MAJOR_SHARE:
+        return None
     state = state_out
     return {
         "external_id": str(poll.get("id") or f"{seat_key}-{date}-{dem}-{rep}"),

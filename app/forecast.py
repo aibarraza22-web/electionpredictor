@@ -29,12 +29,16 @@ CYCLE = 2026
 # snapshots are immutable per (race_id, as_of, model_version): a same-day
 # rerun under an unchanged version keeps the day's first frozen numbers, so a
 # real prediction-affecting change must bump the version to surface.
+# 2026.22: results data fixed (independents who caucus with a party, fusion
+# tickets, blank party labels -- research claim D-004) and two validated
+# additions to the track-record model: a poll layer applied ONLY to races that
+# have polls, and the House incumbent's personal vote (T-005).
 # 2026.21: POLL-FREE. The published forecast is the track-record model
 # (app.track_record, research claim T-004): no polls, no poll-derived expert
 # ratings, no unvalidated campaign layer -- only inputs that also existed for
 # every past election, so the whole system is replayed on 2010-2024 exactly as
 # it runs on 2026.
-MODEL_VERSION = "2026.21"
+MODEL_VERSION = "2026.22"
 # Competitive races must have at least presidential partisanship on their
 # current lines plus a known ballot status (grade C). Redrawn 2026 seats have,
 # by construction, no same-map history, so A/B cannot be required of them.
@@ -888,12 +892,86 @@ RESEARCH_CLAIMS.extend([
      "source": "Found while validating T-004"},
 ])
 
-# Claims whose mechanism the poll-free model (T-004) no longer publishes. Kept
+RESEARCH_CLAIMS.extend([
+    {"id": "T-005",
+     "claim": "Polls help -- but only on races that have them, and each candidate input "
+              "must beat the model on elections the fit has not seen before it is used.",
+     "chamber": "both",
+     "metric": "walk-forward replay 2012-2024: winner accuracy, toss-up accuracy, margin "
+               "error, log loss",
+     "mechanism": "Requested: tune the model so every individual race backtests as accurately "
+                  "as possible, including polling. Per-race weights fitted to each result "
+                  "would make every backtest look near-perfect and would say nothing about "
+                  "2026 -- the weights would be chosen after seeing the answer. Every idea "
+                  "was instead added to the shipped model one at a time and scored only on "
+                  "cycles the fit never saw. ADOPTED: (1) a poll layer on polled races, the "
+                  "poll average counted n/(n+2) of the way so one poll cannot swing a race; "
+                  "(2) the House incumbent's personal vote. REJECTED: state-by-state offsets "
+                  "(worse at every shrinkage, both chambers); seat history added to "
+                  "presidential lean + incumbency (no gain, Senate slightly worse); "
+                  "incumbency x partisanship / environment interactions (worse log loss); "
+                  "Senate personal vote (error worse in 2 of 4 cycles); campaign fundraising "
+                  "(no gain in the Senate, a small House gain even though the FEC totals used "
+                  "include money that follows winners -- a leaky test that can only flatter "
+                  "fundraising, so it is not trusted). PROBABILITY CALIBRATION is adopted per "
+                  "chamber whenever it lowers held-out log loss: among held-out races whose raw "
+                  "underdog odds were <=30%, raw odds expected 171 upsets in the House and 12 in "
+                  "the Senate, and 72 and 4 happened. (An earlier 'better in most cycles' rule "
+                  "flipped the Senate to uncalibrated on a 0.003 difference once polls were in, "
+                  "moving Democratic Senate control 16 points -- too fragile for a headline.)",
+     "status": "Production",
+     "validation": "Whole procedure replayed per held-out cycle, 2012-2024, vs 2026.21 on "
+                   "the same corrected data. House, all races: winner accuracy 93.3% -> 93.9%, "
+                   "toss-ups (decided by <10) 72.3% -> 75.1%, log loss 0.207 -> 0.183, error "
+                   "8.0 -> 7.3 points. Senate, all races: log loss 0.241 -> 0.212 and error "
+                   "7.6 -> 7.2, but winner accuracy 90.5% -> 90.1% and toss-ups 72.9% -> 71.4% "
+                   "(one race each) -- in the Senate polls sharpen margins and probabilities, "
+                   "not who wins. On races that HAD polls (House 417, Senate 180 across "
+                   "2012-2022): House winner accuracy 80.1% -> 83.9%, toss-ups 65.7% -> 71.2%, "
+                   "error 9.3 -> 5.6, log loss 0.471 -> 0.337; Senate error 7.7 -> 7.1, log "
+                   "loss 0.293 -> 0.215, winner accuracy 90.0% -> 89.4%. Counting the poll "
+                   "average n/(n+2) of the way (so one poll cannot swing a race) ties on "
+                   "winner accuracy and improves log loss and interval coverage vs counting it "
+                   "in full. The poll layer is used on a polled race only when it has the best "
+                   "out-of-sample close-race record on past POLLED races (it does, in both "
+                   "chambers). Excluded from polling: races won by a caucus-aligned "
+                   "independent (Maine's King -- the stored polls are Republican vs the weak "
+                   "Democratic nominee) and multi-candidate polls whose Democratic + Republican "
+                   "shares are under 75% or either under 12% (two Alaska polls read D 48 / R "
+                   "2.7 and made Alaska 'Safe Democratic'). Historical polls end in 2022, so the "
+                   "polled backtest cannot include 2024.",
+     "decision": "track_record.POLL_LAYER and PERSONAL_VOTE_WEIGHT (house 0.3, senate 0.0). "
+                 "The poll-free forecast stays visible per race alongside the polled one.",
+     "source": "User: tweak the models so each race backtests as accurately as possible, "
+               "and that can include polling"},
+    {"id": "D-004",
+     "claim": "FIXED DATA BUG: independents who win as Democrats were scored as non-Democrats "
+              "-- Maine's Angus King read as 'R+54' -- and ballot-label gaps dropped whole "
+              "races from the history.",
+     "chamber": "both", "metric": "certified seat totals; backtest rows",
+     "mechanism": "MEDSL labels King, Sanders and Lieberman 'INDEPENDENT', so Maine 2018 became "
+                  "'Republican vs a 10% Democrat' (R+54). Fusion-ticket candidates (Dodd 1992, "
+                  "New York) were counted on one ballot line only. Wyoming 2020 and Alaska "
+                  "2022 carry no party for anyone, and Duckworth/Van Hollen are 'DEMOCRATIC' "
+                  "simplified to OTHER, so those races became +/-100 margins and were "
+                  "silently excluded. Incumbency detection had the same blind spot.",
+     "status": "Production",
+     "validation": "Certified House Democratic seat totals now match exactly in every year "
+                   "2006-2024 (2000-04 differ by Sanders/Goode, counted with the Democrats on "
+                   "purpose); Senate totals match 2012, 2016 and 2018 and the 2024 count of 19. "
+                   "Maine now reads D+36.5/D+29.5/D+29.0 for King's three wins and 9 Senate "
+                   "races that had fallen out of the history are back.",
+     "decision": "ingest.party_labels: per-candidate vote totals, a short documented table of "
+                 "caucus-aligned independents and mislabelled rows, used by the MEDSL parse "
+                 "and the incumbency lookup; store.replace_results so a corrected parse "
+                 "overwrites stored rows instead of being ignored as duplicates. The race "
+                 "page now names each past winner and any independent who won.",
+     "source": "User: Maine 2018 and 2024 show R+54 / R+52 -- Maine did not go Republican"},
+])
+
+# Claims whose mechanism the track-record model (T-004) no longer publishes. Kept
 # in the registry -- the evidence stands -- but no longer driving the forecast.
 _SUPERSEDED_BY_T004 = {
-    "H-002": "polls are not a forecast input",
-    "D-001": "polls are not a forecast input",
-    "D-002": "polls are not a forecast input",
     "P-006": "the campaign layer was never validated on past elections",
     "C-001": "the campaign layer was never validated on past elections",
     "C-002": "the campaign layer was never validated on past elections",
@@ -1082,7 +1160,7 @@ def store_track_record_backtests(models: dict, model_version: str = MODEL_VERSIO
     from uuid import uuid4
 
     from .backtest import metrics as backtest_metrics
-    from .track_record import CANDIDATES, label
+    from .track_record import ALL_CANDIDATES, label
 
     runs, comparison = [], {}
     for chamber, model in models.items():
@@ -1091,7 +1169,7 @@ def store_track_record_backtests(models: dict, model_version: str = MODEL_VERSIO
         by_candidate: dict[str, list] = defaultdict(list)
         for candidate, cycle, _seat, predicted, sigma, actual, win_p in model.backtest_rows:
             by_candidate[candidate].append((predicted, sigma, actual, cycle, win_p))
-        for candidate in ["published"] + CANDIDATES:
+        for candidate in ["published"] + ALL_CANDIDATES:
             scored = _scored_dicts(by_candidate.get(candidate, []))
             if not scored:
                 continue
@@ -1112,7 +1190,7 @@ def store_track_record_backtests(models: dict, model_version: str = MODEL_VERSIO
                 "calibration": json.dumps(summary["calibration"]),
                 "by_cycle": json.dumps(by_cycle),
                 "config": json.dumps({
-                    "design": "walk-forward replay of the whole poll-free procedure: "
+                    "design": "walk-forward replay of the whole procedure: "
                               "every system trained only on earlier cycles, the published "
                               "system re-chosen and every race's uncertainty re-estimated "
                               "from earlier cycles only",
@@ -1124,7 +1202,7 @@ def store_track_record_backtests(models: dict, model_version: str = MODEL_VERSIO
                     "subgroups": {"by_cycle_track_record": model.backtest["by_cycle"]}
                                  if candidate == "published" else {},
                     "national_error_sigma_pts": model.backtest["national_error_sigma_pts"],
-                    "polls_used": False}),
+                    "polls_used": candidate == "with_polls" or candidate == "published"}),
             }
             store.save_backtest_run(run)
             if candidate == "published":
@@ -1135,16 +1213,17 @@ def store_track_record_backtests(models: dict, model_version: str = MODEL_VERSIO
                 "margin_mae": summary["margin_mae"], "n_races": summary["n_races"]}
     store.set_meta("model_comparison", json.dumps(
         {"run_at": store.now(), "champion": model_version, "chambers": comparison,
-         "note": "Poll-free. Identical walk-forward replay for every row; "
+         "note": "Identical walk-forward replay for every row; "
                  f"{SYSTEM_BOARD_PREFIX}* rows are the individual systems the "
-                 "published forecast chooses between by track record."}))
+                 "published forecast chooses between by track record "
+                 f"({SYSTEM_BOARD_PREFIX}with_polls is scored on polled races only)."}))
     return runs
 
 
 def run_track_record_backtests() -> list[dict]:
     """Fit the poll-free model on stored history and persist its backtests."""
-    from .track_record import Inputs, TrackRecordModel
-    inputs = Inputs(ResultLookup(store.all_results()))
+    from .track_record import Inputs, TrackRecordModel, poll_lookup
+    inputs = Inputs(ResultLookup(store.all_results()), polls=poll_lookup(store.all_polls()))
     models = {ch: TrackRecordModel(ch).fit(inputs, CYCLE) for ch in ("house", "senate")}
     return store_track_record_backtests(models)
 
@@ -1170,14 +1249,15 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
                     with_backtests: bool = True, force: bool = False,
                     enforce_gates: bool = True,
                     min_rated_races: int = MIN_RATED_RACES) -> dict:
-    """Train the poll-free track-record model on ingested history, freeze
-    snapshots, store backtests and control simulations.
+    """Train the track-record model on ingested history, freeze snapshots,
+    store backtests and control simulations.
 
+    Polls enter only as a layer on races that have them (research claim T-005);
     ``min_rated_races`` is accepted for compatibility and ignored: expert
-    ratings are no longer a forecast input (research claim T-004)."""
+    ratings are not a forecast input (T-004)."""
     from .campaign import victory_bands
-    from .track_record import (CANDIDATES, SYSTEMS, Inputs, TrackRecordModel,
-                               label, probability)
+    from .track_record import (ALL_CANDIDATES, LAYER_SYSTEMS, POLL_LAYER, SYSTEMS, Inputs,
+                               TrackRecordModel, label, poll_lookup, probability)
 
     as_of = as_of or store.now()
     fingerprint = store.data_fingerprint()
@@ -1190,7 +1270,7 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
                 "skipped": "no input or model change"}
     races = build_race_universe()
     results = ResultLookup(store.all_results())
-    inputs = Inputs(results)
+    inputs = Inputs(results, polls=poll_lookup(store.all_polls()))
     missing = [ch for ch in ("house", "senate") if not inputs.history(ch)]
     if missing:
         raise RuntimeError(f"cannot train: no ingested historical results for {missing}; "
@@ -1211,12 +1291,14 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
         chamber = race["chamber"]
         model = models[chamber]
         row = inputs.row(chamber, CYCLE, race["seat_key"], race["state"], race["district"],
-                         holder_party=race["incumbent_party"])
+                         holder_party=race["incumbent_party"], as_of=as_of)
         out = model.predict(row)
         mean, sigma, p = out["mean"], out["sigma"], out["probability"]
         system = out["system"]
         every = {}
-        for candidate in CANDIDATES:
+        for candidate in ALL_CANDIDATES:
+            if candidate not in out["systems"]:
+                continue  # the poll layer exists only on polled races
             c_sigma = model.uncertainty[candidate].local(CYCLE, row.seat_key, row.state)["sigma"]
             c_mean = out["systems"][candidate]
             # Same odds calibration as the published number, so the board's
@@ -1242,23 +1324,32 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
             change = {"margin_points": round(mean - float(previous.get("margin") or 0.0), 2),
                       "dem_probability_points": round(
                           100 * (p - float(previous.get("dem_probability") or 0.0)), 2)}
-        fallback = system != model.system
+        fallback = system != model.system and system != POLL_LAYER
         expert = consensus.get(race["seat_key"])
         components = {group: round(value, 3) for group, value in out["contributions"].items()
                       if abs(value) >= 0.0005}
         components["_model"] = f"track-record:{system}"
         components["_analysis"] = {
-            "method": "poll-free track record",
+            "method": "track record",
             "system": system, "system_label": label(system),
             "system_about": (SYSTEMS[system]["about"] if system in SYSTEMS
+                             else LAYER_SYSTEMS[system]["about"] if system in LAYER_SYSTEMS
                              else "the plain average of all five systems"),
             "why_this_system": (
+                f"{label(system)} is used because it has the best record on past "
+                f"POLLED {chamber} close races (out-of-sample); races with polls are "
+                "ranked separately from races without" if system == POLL_LAYER else
                 f"{label(system)} is used because {label(model.system)} -- the "
                 f"system with the best {chamber} close-race record -- needs an "
                 "input this race does not have" if fallback else
-                f"it has the best record on past {chamber} close races "
+                f"{label(system)} has the best record on past {chamber} close races "
                 "(out-of-sample, 2010 onward); re-chosen on every run"),
             "chamber_ranking": [{"system": c, **model.scoreboard[c]} for c in model.ranking],
+            "chamber_ranking_polled": [{"system": c, **model.scoreboard_polled[c]}
+                                       for c in model.ranking_polled],
+            "polls": {"n": row.poll_n, "average_margin": (round(row.poll, 2) if row.poll is not None else None),
+                      "latest_poll": row.last_poll, "layer_used": system == POLL_LAYER},
+            "personal_vote_points": round(out["personal_vote"], 2),
             "inputs": {
                 "presidential_lean_pvi": row.pvi, "state_house_lean": (
                     round(row.lean, 2) if row.lean is not None else None),
@@ -1292,6 +1383,7 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
             "chamber": chamber, "pvi": row.pvi is not None,
             "prior": row.prior is not None, "ballot": row.inc is not None,
             "open": row.inc == 0, "redrawn": row.redrawn, "system": system,
+            "polled": row.poll_n > 0, "poll_layer": system == POLL_LAYER,
             "margin": round(mean, 2), "rating": payload["rating"],
             "consensus": expert["consensus"] if expert else None,
             "consensus_safe": is_unanimously_safe(expert)}
@@ -1303,7 +1395,9 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
         "with_ballot_status": sum(1 for m in feature_meta.values() if m["ballot"]),
         "open_seats": sum(1 for m in feature_meta.values() if m["open"]),
         "redrawn_seats": sum(1 for m in feature_meta.values() if m["redrawn"]),
-        "with_polls": 0, "polls_used": False,
+        "with_polls": sum(1 for m in feature_meta.values() if m["polled"]),
+        "poll_layer_races": sum(1 for m in feature_meta.values() if m["poll_layer"]),
+        "polls_used": any(m["poll_layer"] for m in feature_meta.values()),
         "competitive_races": len(gates.competitive_races(snapshots)),
     }
     coverage["competitive_races_grade_a_or_b"] = sum(
@@ -1321,20 +1415,25 @@ def build_forecasts(as_of: str | None = None, prefix: str = "live",
     track_record_meta = {
         chamber: {"published_system": model.system, "label": label(model.system),
                   "ranking": [{"system": c, **model.scoreboard[c]} for c in model.ranking],
+                  "ranking_polled": [{"system": c, **model.scoreboard_polled[c]}
+                                     for c in model.ranking_polled],
                   "backtest": {k: model.backtest[k] for k in
                                ("cycles", "chosen_system_by_cycle", "summary", "by_cycle",
-                                "national_error_sigma_pts", "calibration", "per_system")}}
+                                "national_error_sigma_pts", "calibration", "polled_races",
+                                "per_system")}}
         for chamber, model in models.items()}
     store.set_meta("track_record", json.dumps(track_record_meta))
     store.upsert_model_version({
         "id": MODEL_VERSION, "chamber": "both", "status": "champion",
         "created_at": store.now(),
-        "description": "Poll-free track-record model: five systems built only from "
-                       "certified results, presidential partisanship (Cook PVI), "
-                       "incumbency and the national midterm pattern, each run "
-                       "walk-forward; each chamber publishes the system with the best "
-                       "out-of-sample close-race record, and every race's uncertainty "
-                       "combines a national term with its own seat/state track record. "
+        "description": "Track-record model: five systems built from certified results, "
+                       "presidential partisanship (Cook PVI), incumbency and the national "
+                       "midterm pattern, each run walk-forward; each chamber publishes the "
+                       "system with the best out-of-sample close-race record, a polls layer "
+                       "is used on races that have polls because it beat the poll-free "
+                       "systems on past polled races, House incumbents carry part of "
+                       "their personal vote forward, and every race's uncertainty combines "
+                       "a national term with its own seat/state track record. "
                        + "; ".join(f"{ch}: {label(m.system)}" for ch, m in models.items()),
         "coefficients": json.dumps({
             ch: {name: dict(zip(system.names, [round(w, 4) for w in system.weights]))

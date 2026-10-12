@@ -9,11 +9,11 @@ system reports `live` only when real ingested sources produced the forecasts,
 `demo` for the clearly-labelled synthetic dataset, and `unconfigured` when
 nothing has been ingested.
 
-## The published forecast uses no polls (model 2026.21)
+## How the forecast is built (model 2026.22)
 
-Every 2026 race is forecast only from inputs that also existed for every
-past election, so the whole system can be replayed on 2012–2024 exactly as it
-runs on 2026 (`app/track_record.py`, research claim T-004):
+Every 2026 race starts from inputs that also existed for every past election,
+so the whole system can be replayed on 2012–2024 exactly as it runs on 2026
+(`app/track_record.py`, research claims T-004/T-005):
 
 * **presidential partisanship** — Cook PVI on each district's *current* lines
   (`data/vintage/cook_pvi_vintages.csv`, one pre-election snapshot per cycle);
@@ -26,9 +26,19 @@ runs on 2026 (`app/track_record.py`, research claim T-004):
 Five systems combine those facts differently. Each is run walk-forward, so
 each has a real out-of-sample record on every past race; each chamber
 publishes the one with the best record on past close races, and every race's
-uncertainty is sized by how often the system has missed in that seat and
-state before. Every race page shows that local track record. Polls,
-poll-derived expert ratings and the campaign layer are not forecast inputs.
+uncertainty is sized by how often the system has missed in that seat and state
+before. **Polls are a layer on top**, used only on races that have them and
+only because they beat the poll-free systems on past polled races; the
+poll-free number stays visible on every race. House incumbents also carry part
+of their own past over/under-performance forward. Expert ratings and the
+campaign-finance layer are not forecast inputs. Every idea was scored on
+elections the fit had not seen; the ones that failed (state offsets,
+fundraising, extra interactions) are recorded in the research registry.
+
+Results are certified returns with party sides resolved per candidate
+(`app/ingest/party_labels.py`): independents who caucus with a party — Angus
+King, Bernie Sanders — are on that party's side, fusion-ticket votes are
+summed, and the history page names who actually won each past race.
 Rebuild the 2026 inputs with `python -m app.ingest.ballot_2026` (ballot
 status) and `app.ingest.cook_pvi.build_vintages` (PVI).
 

@@ -24,28 +24,28 @@ from __future__ import annotations
 
 import csv
 import io
-import re
 from collections import defaultdict
 from pathlib import Path
 
+from .ingest import party_labels
 from .ingest.base import STATES, house_seat_key, senate_seat_key
-from .ingest.medsl import BUNDLED_HOUSE_FILE, BUNDLED_SENATE_FILE, DEM_PARTIES, REP_PARTIES
+from .ingest.medsl import BUNDLED_HOUSE_FILE, BUNDLED_SENATE_FILE
 
 CURRENT_FILE = Path(__file__).resolve().parents[1] / "data" / "vintage" / "incumbency_2026.csv"
-_SUFFIXES = {"JR", "SR", "II", "III", "IV", "V"}
 
 
-def surname(name: str) -> str:
-    tokens = [t for t in re.sub(r"[^A-Z ]", " ", str(name).upper()).split()
-              if t not in _SUFFIXES]
-    return tokens[-1] if tokens else ""
+surname = party_labels.surname
 
 
 def _nominees(path: Path, chamber: str) -> dict[tuple[int, str], dict[str, tuple[str, float]]]:
-    """{(cycle, seat_key): {"D"|"R": (surname, votes)}} -- top vote-getter per party."""
+    """{(cycle, seat_key): {"D"|"R": (surname, votes)}} -- the leading candidate
+    on each party's side, with votes summed across ballot lines and parties
+    resolved by ``party_labels`` (so caucus-aligned independents such as King
+    and Sanders are the Democratic side's candidate, and blank-label races
+    like Wyoming 2020 are not lost)."""
     text = path.read_text(errors="replace")
     delimiter = "\t" if "\t" in text.splitlines()[0] else ","
-    best: dict[tuple[int, str], dict[str, tuple[str, float]]] = defaultdict(dict)
+    races: dict[tuple[int, str, str], list[dict]] = defaultdict(list)
     for raw in csv.DictReader(io.StringIO(text), delimiter=delimiter):
         row = {k.lower(): (v or "").strip().strip('"') for k, v in raw.items() if k}
         if row.get("stage", "GEN").upper() not in ("GEN", "GENERAL"):
@@ -54,10 +54,6 @@ def _nominees(path: Path, chamber: str) -> dict[tuple[int, str], dict[str, tuple
         if state not in STATES:
             continue
         special = row.get("special", "FALSE").upper() in ("TRUE", "1")
-        party_raw = (row.get("party_simplified") or row.get("party") or "").upper()
-        party = "D" if party_raw in DEM_PARTIES else "R" if party_raw in REP_PARTIES else None
-        if party is None:
-            continue
         try:
             votes = float(row.get("candidatevotes") or 0)
         except ValueError:
@@ -65,9 +61,15 @@ def _nominees(path: Path, chamber: str) -> dict[tuple[int, str], dict[str, tuple
         cycle = int(row["year"])
         seat = (house_seat_key(state, row.get("district") or 0) if chamber == "house"
                 else senate_seat_key(state, special))
-        current = best[(cycle, seat)].get(party)
-        if current is None or votes > current[1]:
-            best[(cycle, seat)][party] = (surname(row.get("candidate", "")), votes)
+        races[(cycle, seat, state)].append({
+            "candidate": row.get("candidate", ""), "votes": votes,
+            "labels": (row.get("party_detailed", ""), row.get("party", ""),
+                       row.get("party_simplified", ""))})
+    best: dict[tuple[int, str], dict[str, tuple[str, float]]] = defaultdict(dict)
+    for (cycle, seat, state), rows in races.items():
+        for votes, name, side in party_labels.tally(cycle, state, rows)["candidates"]:
+            if side in ("D", "R") and side not in best[(cycle, seat)]:
+                best[(cycle, seat)][side] = (surname(name), votes)  # candidates are vote-sorted
     return best
 
 

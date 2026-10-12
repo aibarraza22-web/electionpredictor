@@ -1,9 +1,8 @@
 # Methodology
 
-## Current published model: poll-free track record (2026.21)
+## Current published model: track record (2026.22)
 
-`app/track_record.py`. Inputs, all poll-free and all available before every
-past election: Cook PVI on the race's current lines, the last contested
+`app/track_record.py`. Base inputs, all available before every past election: Cook PVI on the race's current lines, the last contested
 same-map result, statewide House lean, incumbent-on-ballot status, and the
 president's party / midterm year. Uncontested races (±100 margins) are never
 used as targets or priors; "same map" follows the full redistricting history
@@ -25,6 +24,19 @@ before the one it predicts). From those out-of-sample records:
 * **Odds:** a slope-only logistic calibration of margin/sigma, adopted per
   chamber only when the walk-forward replay says it beats the raw odds on
   mean log loss and in most held-out cycles.
+
+* **Polls (2026.22):** a sixth system, `with_polls` (presidential lean +
+  incumbency + the time-decayed poll average, counted n/(n+2) of the way so one
+  poll cannot swing a race), exists only on races with polls and is used on a
+  polled race only when it has the best out-of-sample close-race record on past
+  POLLED races — ranked separately from unpolled races. Historical polls end in
+  2022.
+* **Personal vote (2026.22):** in the House, an incumbent who runs again on the
+  same lines carries 0.3 × last time's miss versus the presidential-lean +
+  incumbency system. Tested for the Senate and not adopted (mixed).
+* **Rejected on held-out cycles (T-005):** state-by-state offsets, seat history
+  on top of lean + incumbency, partisanship/environment interactions, campaign
+  fundraising.
 
 The stored backtest replays the whole procedure per held-out cycle using only
 earlier cycles. The sections below describe the previous (poll-based) model,

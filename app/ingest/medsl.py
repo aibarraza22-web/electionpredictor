@@ -44,6 +44,7 @@ from pathlib import Path
 import httpx
 
 from .. import store
+from . import party_labels
 from .base import STATES, fetch, house_seat_key, senate_seat_key, sha256, two_party_margin
 
 DATAVERSE = "https://dataverse.harvard.edu"
@@ -117,10 +118,16 @@ def _fetch_datafile(file_id: int) -> bytes:
 
 
 def parse(payload: bytes, chamber: str) -> list[dict]:
+    """Per-seat Democratic-vs-Republican two-party margins.
+
+    Parties are resolved per CANDIDATE, not per ballot line, with caucus-aligned
+    independents and mislabelled rows handled by ``party_labels`` -- see that
+    module for why the raw party column cannot be used directly (Maine's Angus
+    King read as "R+54")."""
     text = payload.decode("utf-8", errors="replace")
     delimiter = "\t" if "\t" in text.splitlines()[0] else ","
     reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
-    votes: dict[tuple, dict] = defaultdict(lambda: {"D": 0.0, "R": 0.0, "other": 0.0})
+    races: dict[tuple, list[dict]] = defaultdict(list)
     for row in reader:
         row = {k.lower(): (v or "").strip().strip('"') for k, v in row.items() if k}
         stage = row.get("stage", "GEN").upper()
@@ -131,7 +138,6 @@ def parse(payload: bytes, chamber: str) -> list[dict]:
             continue
         year = int(row["year"])
         special = row.get("special", "FALSE").upper() in ("TRUE", "1")
-        party = (row.get("party_simplified") or row.get("party") or "").upper()
         try:
             cand_votes = float(row.get("candidatevotes") or 0)
         except ValueError:
@@ -141,25 +147,24 @@ def parse(payload: bytes, chamber: str) -> list[dict]:
                    f"{max(int(row.get('district') or 1), 1):02d}", special)
         else:
             key = (year, senate_seat_key(state, special), state, None, special)
-        bucket = votes[key]
-        if party in DEM_PARTIES:
-            bucket["D"] += cand_votes
-        elif party in REP_PARTIES:
-            bucket["R"] += cand_votes
-        else:
-            bucket["other"] += cand_votes
+        races[key].append({
+            "candidate": row.get("candidate", ""), "votes": cand_votes,
+            "labels": (row.get("party_detailed", ""), row.get("party", ""),
+                       row.get("party_simplified", ""))})
     rows = []
-    for (year, seat_key, state, district, _special), bucket in votes.items():
-        margin = two_party_margin(bucket["D"], bucket["R"])
+    for (year, seat_key, state, district, _special), race_rows in races.items():
+        tally = party_labels.tally(year, state, race_rows)
+        margin = two_party_margin(tally["D"], tally["R"])
         if margin is None:
-            continue  # uncontested by one major party: no two-party margin
-        total = bucket["D"] + bucket["R"]
+            continue  # neither major party fielded a candidate: no two-party margin
+        total = tally["D"] + tally["R"]
         rows.append({
             "cycle": year, "chamber": chamber, "state": state, "district": district,
             "seat_key": seat_key,
-            "dem_pct": bucket["D"] / total * 100.0, "rep_pct": bucket["R"] / total * 100.0,
+            "dem_pct": tally["D"] / total * 100.0, "rep_pct": tally["R"] / total * 100.0,
             "dem_margin": margin,
-            "winner_party": "D" if margin > 0 else "R",
+            # who actually won, by the same side-assignment as the margin
+            "winner_party": tally["top_side"] or ("D" if margin > 0 else "R"),
             "source": SOURCE,
         })
     return rows
@@ -180,7 +185,7 @@ def _ingest_bundled(chamber: str) -> dict:
     path = BUNDLED_FILES[chamber]
     payload = path.read_bytes()
     rows = parse(payload, chamber)
-    inserted = store.insert_rows("election_results", rows)
+    inserted = store.replace_results(SOURCE, chamber, rows)
     provenance = (BUNDLED_HOUSE_PROVENANCE_URL if chamber == "house"
                   else BUNDLED_SENATE_PROVENANCE_URL)
     store.record_source(

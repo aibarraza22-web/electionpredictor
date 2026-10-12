@@ -258,3 +258,151 @@ def test_poll_free_gate():
         gates.check_poll_free_inputs({**ok, "with_pvi": 400})
     with pytest.raises(gates.GateFailure):
         gates.check_poll_free_inputs({**ok, "with_ballot_status": 100})
+
+
+# --- results data: independents, fusion tickets, mislabelled rows -------------------
+
+def _tally(year, state, rows):
+    from app.ingest import party_labels
+    prepared = [{"candidate": name, "votes": votes, "labels": labels}
+                for name, votes, labels in rows]
+    return party_labels.tally(year, state, prepared)
+
+
+def test_independent_who_caucuses_with_democrats_is_on_the_democratic_side():
+    """Maine 2018: Angus King (I) 54.3%, Republican 35.3%, Democrat 10.4%. The
+    raw party column made this 'R+54'; King's side is the Democratic one."""
+    t = _tally(2018, "ME", [
+        ("ANGUS S. KING, JR.", 344575, ("INDEPENDENT", "OTHER")),
+        ("ERIC L. BRAKEY", 223502, ("REPUBLICAN", "REPUBLICAN")),
+        ("ZAK RINGELSTEIN", 66268, ("DEMOCRAT", "DEMOCRAT")),
+        ("OTHERS", 64, ("", "OTHER"))])
+    assert t["top_side"] == "D" and t["D"] == pytest.approx(344575 + 66268)
+    margin = (t["D"] - t["R"]) / (t["D"] + t["R"]) * 100
+    assert 28 < margin < 31  # D+29, not R+54
+
+
+def test_fusion_ticket_votes_are_summed_per_candidate():
+    t = _tally(1992, "CT", [
+        ("CHRISTOPHER J. DODD", 600000, ("DEMOCRAT",)),
+        ("CHRISTOPHER J. DODD", 250000, ("A CONNECTICUT PARTY", "OTHER")),
+        ("BROOK JOHNSON", 450000, ("REPUBLICAN",))])
+    assert t["D"] == 850000 and t["R"] == 450000
+
+
+def test_blank_and_mislabelled_party_rows_are_resolved():
+    # Wyoming 2020: no party for anyone in the source file
+    t = _tally(2020, "WY", [("CYNTHIA M. LUMMIS", 198100, ("", "OTHER")),
+                            ("MERAV BEN DAVID", 72766, ("", "OTHER")),
+                            ("OVER VOTES", 165, ("", "OTHER"))])
+    assert t["top_side"] == "R" and t["D"] == 72766
+    # 'DEMOCRATIC' simplified to OTHER (Duckworth 2022) and Minnesota's
+    # Independent-Republican label are both read from the detailed label
+    from app.ingest import party_labels
+    assert party_labels.resolve(2022, "IL", "TAMMY DUCKWORTH", "DEMOCRATIC", "OTHER") == "D"
+    assert party_labels.resolve(1992, "MN", "JIM RAMSTAD", "INDEPENDENT-REPUBLICAN") == "R"
+    # an ordinary independent or third party stays 'other'
+    assert party_labels.resolve(2018, "NM", "GARY E JOHNSON", "LIBERTARIAN") is None
+    assert party_labels.resolve(2014, "SD", "LARRY PRESSLER", "INDEPENDENT") is None
+
+
+def test_bundled_results_match_certified_seat_totals():
+    from app.ingest import medsl
+    house = medsl.parse(medsl.BUNDLED_HOUSE_FILE.read_bytes(), "house")
+    certified = {2010: 193, 2012: 201, 2014: 188, 2018: 235, 2020: 222, 2022: 213, 2024: 215}
+    for year, democrats in certified.items():
+        assert sum(1 for r in house if r["cycle"] == year and r["winner_party"] == "D") == democrats
+    senate = {(r["cycle"], r["seat_key"]): r for r in
+              medsl.parse(medsl.BUNDLED_SENATE_FILE.read_bytes(), "senate")}
+    for cycle in (2012, 2018, 2024):  # King won Maine as an independent each time
+        assert senate[(cycle, "senate-ME")]["winner_party"] == "D"
+        assert senate[(cycle, "senate-ME")]["dem_margin"] > 20
+    assert senate[(2020, "senate-ME")]["dem_margin"] < 0     # Collins
+
+
+def test_race_history_names_the_independent_who_won():
+    from app.ingest import party_labels
+    assert "King" in party_labels.aligned_note(2024, "ME")
+    assert party_labels.aligned_note(2020, "ME") is None
+
+
+def test_replace_results_overwrites_stale_rows(temp_db):
+    """A corrected parse must replace stored rows; insert_rows ignores duplicates."""
+    from app import store
+    base = {"cycle": 2018, "chamber": "senate", "state": "ME", "district": None,
+            "seat_key": "senate-ME", "dem_pct": 1.0, "rep_pct": 99.0,
+            "winner_party": "R", "source": "medsl-constituency-returns"}
+    store.replace_results("medsl-constituency-returns", "senate", [{**base, "dem_margin": -54.3}])
+    store.replace_results("medsl-constituency-returns", "senate",
+                          [{**base, "dem_margin": 29.5, "winner_party": "D"}])
+    rows = store.all_results("senate")
+    assert len(rows) == 1 and rows[0]["dem_margin"] == 29.5 and rows[0]["winner_party"] == "D"
+
+
+# --- personal vote and the poll layer ---------------------------------------------------
+
+def _scored(cycle, seat, y, ref_pred, state="AA", pvi=1.0, inc=1.0):
+    return tr.Scored(cycle, seat, state, y, {c: ref_pred for c in tr.CANDIDATES},
+                     pvi=pvi, inc=inc, chamber="house", raw={tr.PERSONAL_VOTE_REFERENCE: ref_pred})
+
+
+def test_personal_vote_only_when_the_same_incumbent_runs_again_on_the_same_map():
+    records = {(2022, "house-AA-01"): _scored(2022, "house-AA-01", y=10.0, ref_pred=2.0)}
+    row = tr.SeatRow(seat_key="house-AA-01", chamber="house", state="AA", district="1",
+                     cycle=2024, y=None, pvi=1.0, inc=1.0)
+    assert tr.personal_vote_term("house", row, records) == pytest.approx(0.3 * 8.0)
+    # open seat: nothing to carry forward
+    assert tr.personal_vote_term("house", tr.SeatRow(**{**row.__dict__, "inc": 0.0}), records) == 0.0
+    # the incumbent is on the OTHER side of the party that won last time
+    assert tr.personal_vote_term("house", tr.SeatRow(**{**row.__dict__, "inc": -1.0}), records) == 0.0
+    # districts redrawn between the two elections (Ohio, 2024 -> 2026)
+    redrawn = tr.SeatRow(**{**row.__dict__, "state": "OH", "cycle": 2026})
+    records[(2024, "house-AA-01")] = _scored(2024, "house-AA-01", 10.0, 2.0, state="OH")
+    assert tr.personal_vote_term("house", redrawn, records) == 0.0
+    # the Senate weight is zero: tested, mixed, not adopted
+    assert tr.personal_vote_term("senate", row, records) == 0.0
+
+
+def test_poll_layer_is_weighted_by_how_much_polling_there_is():
+    one = tr.SeatRow(seat_key="s", chamber="senate", state="AA", district=None, cycle=2026,
+                     y=None, pvi=0.0, inc=0.0, poll=10.0, poll_n=1)
+    ten = tr.SeatRow(**{**one.__dict__, "poll_n": 10})
+    none = tr.SeatRow(**{**one.__dict__, "poll": None, "poll_n": 0})
+    feature = lambda r: tr.vector(r, ["poll"])[1][-1]  # noqa: E731
+    assert feature(one) == pytest.approx(10.0 / 3.0)        # a lone poll counts a third
+    assert feature(ten) == pytest.approx(10.0 * 10 / 12)    # ten polls count 83%
+    assert feature(none) == 0.0
+    assert tr.usable(tr.POLL_LAYER, one) and not tr.usable(tr.POLL_LAYER, none)
+
+
+def test_polled_races_use_the_polled_ranking_and_others_do_not():
+    polled = tr.SeatRow(seat_key="s", chamber="house", state="AA", district="1", cycle=2026,
+                        y=None, pvi=1.0, poll=3.0, poll_n=4)
+    unpolled = tr.SeatRow(**{**polled.__dict__, "poll": None, "poll_n": 0})
+    ranking, polled_ranking = ["pvi_inc", "ensemble"], [tr.POLL_LAYER, "pvi_inc"]
+    assert tr.pick_for(ranking, polled, polled_ranking) == tr.POLL_LAYER
+    assert tr.pick_for(ranking, unpolled, polled_ranking) == "pvi_inc"
+    assert tr.pick_for(ranking, polled, []) == "pvi_inc"   # too little polled history to judge
+
+
+def test_multi_candidate_polls_are_not_treated_as_head_to_heads():
+    """Two Alaska polls read D 48.4 / R 2.7 (name-matching found a minor
+    Republican) and made Alaska 'Safe Democratic'."""
+    base = {"cycle": 2026, "seat_key": "senate-AK", "poll_date": "2026-06-01"}
+    rows = [{**base, "dem_pct": 48.4, "rep_pct": 2.7, "dem_margin": 45.7},      # AK: dropped
+            {**base, "dem_pct": 22.0, "rep_pct": 45.0, "dem_margin": -23.0},    # independent splits MT
+            {**base, "dem_pct": 44.0, "rep_pct": 46.0, "dem_margin": -2.0}]     # a real head-to-head
+    lookup = tr.poll_lookup(rows)
+    average, n, _ = lookup.average(2026, "senate-AK", "2026-09-01")
+    assert n == 1 and average == pytest.approx(-2.0)
+
+
+def test_votehub_rejects_multi_candidate_polls():
+    from datetime import date, timedelta
+    from app.ingest import votehub
+    fresh = (date.today() - timedelta(days=5)).isoformat()
+    index = {"senate-AK": [("sullivan", "REP"), ("peltola", "DEM"), ("miller", "REP")]}
+    poll = {"poll_type": "us-senator", "subject": "2026 Alaska", "end_date": fresh, "id": "a",
+            "sample_size": 800, "population": "lv",
+            "answers": [{"choice": "Mary Peltola", "pct": 48.4}, {"choice": "Miller", "pct": 2.7}]}
+    assert votehub._normalize(poll, index) is None

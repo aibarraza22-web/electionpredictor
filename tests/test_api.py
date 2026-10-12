@@ -72,7 +72,7 @@ def test_race_detail_history_components(client):
     components = client.get("/api/races/2026-house-CA-01/components").json()
     assert "components" in components
     analysis = client.get("/api/races/2026-house-CA-01/campaign").json()["analysis"]
-    assert analysis["method"] == "poll-free track record"
+    assert analysis["method"] == "track record"
     assert "dem_by_at_least_8" in analysis["victory_bands"]
     # every candidate system is shown, and the published one is among them
     assert len(analysis["every_system"]) == 6 and analysis["system"] in analysis["every_system"]
@@ -139,7 +139,7 @@ def test_data_health_reports_demo_mode(client):
     # champion snapshots for all 468 races, plus challenger/baseline
     # alternates for the per-race model board
     assert health["counts"]["forecasts"] >= 468
-    assert health["coverage"]["polls_used"] is False
+    assert health["coverage"]["polls_used"] is False  # the synthetic fixture has no polls
     assert health["coverage"]["with_pvi"] == health["coverage"]["races"]
     track = health["track_record"]
     assert set(track) == {"house", "senate"}

@@ -79,6 +79,26 @@ def insert_rows(table_name: str, rows: Sequence[dict]) -> int:
     return inserted
 
 
+def replace_results(source: str, chamber: str, rows: Sequence[dict]) -> int:
+    """Replace every stored result for ``(source, chamber)`` with ``rows``.
+
+    For a bundled, certified dataset this is the right semantics: ``insert_rows``
+    ignores duplicates, so a CORRECTED parse (e.g. the independents fix) would
+    never overwrite the wrong margins already in the database. The delete and
+    the insert share one transaction, so a failed run leaves the old rows."""
+    t = db.election_results
+    table = db.metadata.tables["election_results"]
+    pk_columns = list(table.primary_key.columns)
+    inserted = 0
+    with db.get_engine().begin() as c:
+        c.execute(delete(t).where(t.c.source == source, t.c.chamber == chamber))
+        for start in range(0, len(rows), 500):
+            result = c.execute(db.insert_ignore(table).returning(*pk_columns),
+                               list(rows[start:start + 500]))
+            inserted += len(result.fetchall())
+    return inserted
+
+
 # --- reads used by features/backtests ---------------------------------
 
 def all_results(chamber: str | None = None) -> list[dict]:

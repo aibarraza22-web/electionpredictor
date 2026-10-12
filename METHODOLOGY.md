@@ -1,6 +1,6 @@
 # Methodology
 
-## Current published model: track record (2026.23)
+## Current published model: track record (2026.24)
 
 `app/track_record.py`. Base inputs, all available before every past election: Cook PVI on the race's current lines, the last contested
 same-map result, statewide House lean, incumbent-on-ballot status, and the
@@ -28,7 +28,12 @@ before the one it predicts). From those out-of-sample records:
   log loss: House 0.1787 → 0.1669, Senate 0.2022 → 0.1942.
 * **Lean curve (2026.23):** House presidential lean enters with a curve term
   (pvi·|pvi|/100); lopsided districts had been mis-sized by 4–7 points.
-* **Odds:** a slope-only logistic calibration of margin/sigma, adopted per
+* **Odds (2026.24):** the calibration is fitted on contested races only
+  (|margin| < 15) with sigma^0.5, because safe seats had been setting the odds
+  for contested ones (Alaska at 1.5% with a tied polling average, now ~12%).
+  Held-out log loss: House 0.124 → 0.111. A flat cap on probabilities was tested
+  and rejected (stated 95%+ chances were right 100% of the time in the Senate).
+* **Odds, before 2026.24:** a slope-only logistic calibration of margin/sigma, adopted per
   chamber only when the walk-forward replay says it beats the raw odds on
   mean log loss and in most held-out cycles.
 
@@ -38,9 +43,14 @@ before the one it predicts). From those out-of-sample records:
   polled race only when it has the best out-of-sample close-race record on past
   POLLED races — ranked separately from unpolled races. Historical polls end in
   2022.
-* **Personal vote (2026.22):** in the House, an incumbent who runs again on the
-  same lines carries 0.3 × last time's miss versus the presidential-lean +
-  incumbency system. Tested for the Senate and not adopted (mixed).
+* **Personal vote (2026.22, Senate 2026.24):** in the House, an incumbent who
+  runs again on the same lines carries 0.3 × last time's miss versus the
+  presidential-lean + incumbency system. The Senate ("Collins effect") carries
+  0.15 × the average of the senator's last two misses, on polled races too
+  (polls under-read the same incumbents again). Senate held-out: winner accuracy
+  90.9% → 91.7%, toss-ups 71.4% → 74.3%, Brier 0.0614 → 0.0596; modest, and it
+  mostly regresses — senators who beat the fundamentals by 8+ twice did not
+  repeat it on average.
 * **Rejected on held-out cycles (T-005):** state-by-state offsets, seat history
   on top of lean + incumbency, partisanship/environment interactions, campaign
   fundraising.

@@ -158,11 +158,22 @@ POLL_SHRINK = 2.0
 # behind) their district's fundamentals last time. House: error fell in all 4
 # cycles where it applies (2016/18/20/24: 7.7->7.3, 6.9->6.6, 6.2->5.7, 5.4->5.3
 # points), accuracy flat-to-up, at every weight tried from 0.15 to 0.5; 0.3 is
-# the middle of that range, not a tuned optimum. Senate: NOT adopted -- the
-# fuller 2016-24 test was mixed (error worse in 2 of 4 cycles at 0.3), so the
-# Senate weight is zero. State-level offsets were tested too and rejected: they
-# were worse at every shrinkage in both chambers.
-PERSONAL_VOTE_WEIGHT = {"house": 0.3, "senate": 0.0}
+# the middle of that range, not a tuned optimum.
+# Senate ("the Collins effect", 2026.23): adopted at 0.15 of the average of the
+# senator's last TWO misses, and applied to polled races too (polls under-read
+# the same incumbents again: carry-over slope 0.36, se 0.17, on 59 pairs where
+# both races were polled; 0.19-0.28 on the 2002-24 fundamentals, se 0.06-0.08).
+# An earlier Senate test (2010+, last race only) found nothing and the weight
+# was zero. Full replay 2012-24, Senate: winner accuracy 90.9% -> 91.7%,
+# toss-ups 71.4% -> 74.3%, Brier 0.0614 -> 0.0596, log loss 0.1942 -> 0.1914
+# (better in 4 of 7 cycles, worse in 2) at an unchanged 6.5-point error. It is
+# a modest, general effect: Collins's own misses of -32 (2014) and -8 (2020)
+# move her 2026 race about 3 points. Weights 0.1-0.2 and one or two prior races
+# all land in the same place. State-level offsets were tested too and rejected:
+# they were worse at every shrinkage in both chambers.
+PERSONAL_VOTE_WEIGHT = {"house": 0.3, "senate": 0.15}
+PERSONAL_VOTE_PRIORS = {"house": 1, "senate": 2}
+PERSONAL_VOTE_ON_POLLS = {"house": False, "senate": True}
 PERSONAL_VOTE_REFERENCE = "pvi_inc"
 
 # Feature -> human group, for the additive "why this forecast" breakdown.
@@ -435,27 +446,34 @@ class Scored:
 
 def personal_vote_term(chamber: str, row, records: dict[tuple[int, str], "Scored"]) -> float:
     """Carry forward part of how far this seat's incumbent beat (or trailed)
-    the fundamentals last time -- only if the SAME incumbent is running again
-    (the prior winner is on the incumbent's side) and, in the House, the map
-    has not changed. The reference residual is a fixed system's own
-    out-of-sample miss, taken before any personal-vote term, so it never
-    compounds."""
+    the fundamentals in their previous race(s) -- only while the SAME incumbent
+    keeps running (each earlier race was won by the incumbent's side) and, in
+    the House, the map has not changed between them. The reference residual is
+    a fixed system's own out-of-sample miss, taken before any personal-vote
+    term, so it never compounds. The Senate averages up to two earlier races
+    (a senator who outran the fundamentals twice is a pattern, not a fluke)."""
     weight = PERSONAL_VOTE_WEIGHT.get(chamber, 0.0)
     if not weight or not row.inc:
         return 0.0
     step = 2 if chamber == "house" else 6
-    prev = records.get((row.cycle - step, row.seat_key))
-    if prev is None or prev.pvi is None or PERSONAL_VOTE_REFERENCE not in prev.raw:
-        return 0.0
-    if chamber == "house" and redistricting.map_changed(row.state, prev.cycle, row.cycle):
-        return 0.0
-    if (prev.y > 0) != (row.inc > 0):
-        return 0.0
-    return weight * (clip(prev.y, Y_CLIP) - prev.raw[PERSONAL_VOTE_REFERENCE])
+    misses = []
+    for back in range(1, PERSONAL_VOTE_PRIORS.get(chamber, 1) + 1):
+        prev = records.get((row.cycle - step * back, row.seat_key))
+        if prev is None or prev.pvi is None or PERSONAL_VOTE_REFERENCE not in prev.raw:
+            break
+        if chamber == "house" and redistricting.map_changed(row.state, prev.cycle, row.cycle):
+            break
+        if (prev.y > 0) != (row.inc > 0) or abs(prev.y) >= UNCONTESTED:
+            break
+        misses.append(clip(prev.y, Y_CLIP) - prev.raw[PERSONAL_VOTE_REFERENCE])
+    return weight * fmean(misses) if misses else 0.0
 
 
-def _apply_personal_vote(preds: dict[str, float], term: float) -> dict[str, float]:
-    return {c: (v + term if c != POLL_LAYER else v) for c, v in preds.items()}
+def _apply_personal_vote(preds: dict[str, float], term: float, chamber: str = "house") -> dict[str, float]:
+    """Add the personal-vote term to every poll-free candidate; to the poll layer
+    only where PERSONAL_VOTE_ON_POLLS says polls under-read the incumbent too."""
+    on_polls = PERSONAL_VOTE_ON_POLLS.get(chamber, False)
+    return {c: (v + term if (c != POLL_LAYER or on_polls) else v) for c, v in preds.items()}
 
 
 def walk_forward(history: dict[int, list[SeatRow]]) -> dict[tuple[int, str], Scored]:
@@ -475,7 +493,7 @@ def walk_forward(history: dict[int, list[SeatRow]]) -> dict[tuple[int, str], Sco
             raw = predict_all(systems, row)
             term = personal_vote_term(row.chamber, row, scored)
             scored[(target, row.seat_key)] = Scored(
-                target, row.seat_key, row.state, row.y, _apply_personal_vote(raw, term),
+                target, row.seat_key, row.state, row.y, _apply_personal_vote(raw, term, row.chamber),
                 pvi=row.pvi, prior=row.prior, winner=row.winner, poll=row.poll,
                 poll_n=row.poll_n, inc=row.inc, chamber=row.chamber, raw=raw, personal=term)
     return scored
@@ -605,19 +623,39 @@ def widen(sigma: float, raw: dict[str, float], system: str) -> float:
     return sqrt(sigma ** 2 + (DISAGREEMENT_WEIGHT * disagreement(raw, system)) ** 2)
 
 
+# The odds calibration. Fitting one slope on z = margin/sigma over every race let
+# the many safe seats (huge sigma, certain results) set the odds for contested
+# ones: a polled race with sigma 4.8 and a 5.7-point lean (Alaska 2026) came out
+# at 1.5% for the underdog, though 4 of the 20 historical Senate analogues (a
+# Republican-leaning state, polls near a tie) went the other way. Two changes,
+# both scored on held-out cycles with the slope refit each cycle: sigma enters
+# with exponent 0.5, not 1 (a larger sigma is partly noise, so it counts for
+# less), and the slope is fitted on contested races only (|margin| < 15).
+# Held-out log loss: House 0.124 -> 0.111, Senate 0.139 -> 0.137, with the
+# underdog's chance at Alaska-like margins 1.8% -> 8.9%.
+CALIBRATION_SIGMA_POWER = 0.5
+CALIBRATION_CONTESTED = 15.0
+_CALIBRATION_REFERENCE_SIGMA = 10.0
+
+
+def _calibration_z(mean: float, sigma: float) -> float:
+    return mean / (sigma ** CALIBRATION_SIGMA_POWER
+                   * _CALIBRATION_REFERENCE_SIGMA ** (1.0 - CALIBRATION_SIGMA_POWER))
+
+
 def probability(mean: float, sigma: float, calibration: tuple | None = None) -> float:
     """Win probability from a margin and its sigma; with ``calibration``
-    (a, b) it is the logistic read of z = mean/sigma fitted on past outcomes."""
+    (a, b) it is the logistic read of the calibrated z fitted on past outcomes."""
     if calibration:
         from math import exp
         a, b = calibration
-        z = max(-30.0, min(30.0, a + b * mean / sigma))
+        z = max(-30.0, min(30.0, a + b * _calibration_z(mean, sigma)))
         return min(0.995, max(0.005, 1.0 / (1.0 + exp(-z))))
     return min(0.995, max(0.005, normal_cdf(mean / sigma)))
 
 
 def fit_calibration(rows: list[tuple], min_rows: int = 50) -> tuple | None:
-    """Slope-only logistic P(D win) = sigmoid(b*z), z = margin/sigma, fitted
+    """Slope-only logistic P(D win) = sigmoid(b*z), z = margin/sigma^0.5 (scaled), fitted
     by Newton's method on past out-of-sample (margin, sigma, actual) rows.
 
     No intercept on purpose. A free intercept fitted the average past
@@ -627,7 +665,8 @@ def fit_calibration(rows: list[tuple], min_rows: int = 50) -> tuple | None:
     loss (House 0.1692 vs 0.1691, Senate 0.2076 vs 0.2067) without that
     guess. The national miss is the simulation's national-shock term."""
     from math import exp
-    zs = [m / s for m, s, _y, *_ in rows]
+    rows = [r for r in rows if abs(r[0]) < CALIBRATION_CONTESTED and abs(r[2]) < UNCONTESTED]
+    zs = [_calibration_z(m, s) for m, s, _y, *_ in rows]
     won = [1 if y > 0 else 0 for _m, _s, y, *_ in rows]
     if len(zs) < min_rows or len(set(won)) < 2:
         return None
@@ -891,7 +930,7 @@ class TrackRecordModel:
     def predict(self, row: SeatRow) -> dict:
         raw = predict_all(self.systems, row)
         term = personal_vote_term(self.chamber, row, self.records)
-        preds = _apply_personal_vote(raw, term)
+        preds = _apply_personal_vote(raw, term, row.chamber)
         system = pick_for(self.ranking, row, self.ranking_polled)
         mean = preds[system]
         unc = self.uncertainty[system].local(row.cycle, row.seat_key, row.state)
@@ -905,7 +944,7 @@ class TrackRecordModel:
                     groups[group] += value / len(fitted)
         else:
             groups = self.systems[system].contributions(row)
-        if term and system != POLL_LAYER:
+        if term and (system != POLL_LAYER or PERSONAL_VOTE_ON_POLLS.get(self.chamber)):
             groups = dict(groups)
             groups["incumbent's personal vote"] = groups.get("incumbent's personal vote", 0.0) + term
         record = seat_record(self.records, row, system, fallback=self.ranking[0])

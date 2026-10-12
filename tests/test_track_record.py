@@ -359,8 +359,6 @@ def test_personal_vote_only_when_the_same_incumbent_runs_again_on_the_same_map()
     redrawn = tr.SeatRow(**{**row.__dict__, "state": "OH", "cycle": 2026})
     records[(2024, "house-AA-01")] = _scored(2024, "house-AA-01", 10.0, 2.0, state="OH")
     assert tr.personal_vote_term("house", redrawn, records) == 0.0
-    # the Senate weight is zero: tested, mixed, not adopted
-    assert tr.personal_vote_term("senate", row, records) == 0.0
 
 
 def test_poll_layer_is_weighted_by_how_much_polling_there_is():
@@ -482,3 +480,37 @@ def test_seat_record_reports_the_margin_miss():
     assert out[0]["margin_miss"] == pytest.approx(-14.1) and out[0]["called_correctly"] is False
     blowout = tr.Scored(2020, "senate-ME", "ME", 100.0, {"ensemble": 4.9}, chamber="senate")
     assert tr.seat_record({(2020, "senate-ME"): blowout}, row, "ensemble")[0]["margin_miss"] is None
+
+
+def test_senate_collins_effect_averages_two_misses_and_reaches_polled_races():
+    """A senator's last two misses (here -32 and -8 own-party points, Collins's
+    2014 and 2020) carry 0.15 of their mean, only while the same side keeps
+    winning, and the term is applied to the poll layer as well."""
+    def prior(cycle, y, ref):
+        return _scored(cycle, "senate-ME", y=y, ref_pred=ref, state="ME")
+    records = {(2014, "senate-ME"): prior(2014, -37.0, -4.5), (2020, "senate-ME"): prior(2020, -9.2, -1.2)}
+    row = tr.SeatRow(seat_key="senate-ME", chamber="senate", state="ME", district=None,
+                     cycle=2026, y=None, pvi=2.0, inc=-1.0)
+    # incumbent is on the Republican side (inc < 0): the misses are -32.5 and -8.0
+    assert tr.personal_vote_term("senate", row, records) == pytest.approx(0.15 * (-8.0 + -32.5) / 2)
+    # a Democratic win in between breaks the chain: only the most recent race counts if it matches
+    records[(2020, "senate-ME")] = prior(2020, 5.0, -1.2)
+    assert tr.personal_vote_term("senate", row, records) == 0.0
+    preds = {"pvi_inc": 1.0, tr.POLL_LAYER: 2.0}
+    assert tr.personal_vote_term("senate", tr.SeatRow(**{**row.__dict__, "inc": 0.0}), records) == 0.0
+    out = tr._apply_personal_vote(preds, -3.0, "senate")
+    assert out[tr.POLL_LAYER] == pytest.approx(-1.0) and out["pvi_inc"] == pytest.approx(-2.0)
+    assert tr._apply_personal_vote(preds, -3.0, "house")[tr.POLL_LAYER] == pytest.approx(2.0)
+
+
+def test_calibration_is_fitted_on_contested_races_only():
+    rng = Random(7)
+    contested = [(rng.uniform(-10, 10), 6.0) for _ in range(300)]
+    rows = [(m, s, 1.0 if m + rng.gauss(0, 6.0) > 0 else -1.0) for m, s in contested]
+    base = tr.fit_calibration(rows)
+    # adding certain, lopsided results (huge margins, huge sigma) must not move it
+    safe = [(rng.choice([-1, 1]) * rng.uniform(30, 60), 20.0) for _ in range(2000)]
+    rows_with_safe = rows + [(m, s, 1.0 if m > 0 else -1.0) for m, s in safe]
+    assert tr.fit_calibration(rows_with_safe) == base
+    # and a polled race with a small sigma is NOT stated near-certain on a 5-point lean
+    assert tr.probability(-5.3, 5.2, base) > 0.05

@@ -9,7 +9,7 @@ system reports `live` only when real ingested sources produced the forecasts,
 `demo` for the clearly-labelled synthetic dataset, and `unconfigured` when
 nothing has been ingested.
 
-## How the forecast is built (model 2026.23)
+## How the forecast is built (model 2026.24)
 
 Every 2026 race starts from inputs that also existed for every past election,
 so the whole system can be replayed on 2012–2024 exactly as it runs on 2026

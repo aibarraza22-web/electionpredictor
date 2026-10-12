@@ -1,6 +1,6 @@
 # Model card
 
-**Model version:** 2026.23 — track-record model (`app/track_record.py`):
+**Model version:** 2026.24 — track-record model (`app/track_record.py`):
 five ridge systems over certified results, Cook PVI on current lines,
 incumbency and the national midterm pattern; each chamber publishes the system
 with the best out-of-sample close-race record, per-race uncertainty is sized by
@@ -19,6 +19,14 @@ counts are stored with each fit in `model_versions.coefficients`.
 **Validation:** expanding-window backtests run weekly, on manual full runs,
 and after controlled methodology changes. Frequent data-only refreshes reuse
 the last validated model. Metrics live in `/api/backtests`, never in prose.
+
+**2026.24:** the odds calibration now uses contested races only (sigma^0.5), which
+lifted the underdog at Alaska-like inputs from 1.5% to ~12%; the Senate carries
+a senator's personal vote (the "Collins effect", 0.15 of the last two misses).
+Full replay 2012–24 with everything: House log loss 0.1551, Brier 0.0453;
+Senate winner accuracy 91.7%, toss-ups 74.3%, Brier 0.0586. Alaska's margin
+(R+5.3) was not changed: in 20 past Senate races in Republican-leaning states
+with near-tied polls the mean result was R+3.8 (the Democrat won 4).
 
 **Margin audit (2026.23):** across the 2012–24 replay the margins show no tilt
 toward either party (actual minus predicted: House +0.4 in Democratic-favored

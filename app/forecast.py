@@ -29,6 +29,9 @@ CYCLE = 2026
 # snapshots are immutable per (race_id, as_of, model_version): a same-day
 # rerun under an unchanged version keeps the day's first frozen numbers, so a
 # real prediction-affecting change must bump the version to surface.
+# 2026.24: odds calibration fitted on contested races with sigma^0.5 (T-007: Alaska
+# was at 1.5% with a tied polling average) and a Senate personal-vote term -- the
+# "Collins effect" (S-008).
 # 2026.23: margin and uncertainty audit (research claims D-007, T-006): a lean
 # curve term for the House (lopsided districts were mis-sized by 4-7 points) and
 # uncertainty that grows when the evidence conflicts (the five systems disagree,
@@ -42,7 +45,7 @@ CYCLE = 2026
 # ratings, no unvalidated campaign layer -- only inputs that also existed for
 # every past election, so the whole system is replayed on 2010-2024 exactly as
 # it runs on 2026.
-MODEL_VERSION = "2026.23"
+MODEL_VERSION = "2026.24"
 # Competitive races must have at least presidential partisanship on their
 # current lines plus a known ballot status (grade C). Redrawn 2026 seats have,
 # by construction, no same-map history, so A/B cannot be required of them.
@@ -1021,13 +1024,13 @@ RESEARCH_CLAIMS.extend([
                   "cycle had ~20 close races to judge and crowned 'seat history'; below 60 close "
                   "races the chamber now uses the average of all five systems. MAINE: the 2020 "
                   "miss (predicted D+4.9, result R+9.2) is a polling miss -- 13 polls, nearly all "
-                  "Gideon ahead; the 2012 miss is King, an independent in an open seat. A "
-                  "Collins-specific rule was NOT added: the general version of it -- each "
-                  "senator's own persistent over/under-performance -- has a carry-over slope of "
-                  "0.05 (90% interval -0.05..0.14) across 131 same-incumbent Senate pairs, and "
-                  "big misses mostly reverse (FL -46 -> +5, NH -35 -> +9), so a single-race "
-                  "patch would memorize one result. Clipping blowout priors at 15/25/35 points "
-                  "was also tested and did not help.",
+                  "Gideon ahead; the 2012 miss is King, an independent in an open seat. "
+                  "UPDATE (2026.23, claim S-008): a Collins-only rule was still not added, but "
+                  "the general version -- a senator's own persistent over/under-performance -- "
+                  "was re-measured on a longer record and IS now in the model. The first test "
+                  "(2010+, last race only) found a carry-over slope of 0.05; the 2002-24 record "
+                  "gives 0.19-0.28 (se 0.06-0.08), and 0.36 against the polls. Clipping blowout "
+                  "priors at 15/25/35 points was tested and did not help.",
      "status": "Production",
      "validation": "Held-out Senate 2012-24: winner accuracy 90.1% -> 90.9%, log loss 0.212 -> "
                    "0.202, error 7.2 -> 6.5 points, 80% intervals cover 81.7% (nominal 80%); "
@@ -1080,6 +1083,51 @@ RESEARCH_CLAIMS.extend([
      "decision": "track_record.DISAGREEMENT_WEIGHT = 1.0, POLL_GAP_WEIGHT = 1.0 (flat region "
                  "0.5-2).",
      "source": "User: the model must be built to account for polling misses like Maine's"},
+    {"id": "S-008",
+     "claim": "ADOPTED: the 'Collins effect' -- a senator who repeatedly beats the fundamentals "
+              "(and the polls) keeps doing so, in part.",
+     "chamber": "senate", "metric": "held-out winner accuracy, Brier score, log loss",
+     "mechanism": "The Senate now carries 0.15 of the average of the incumbent's last two "
+                  "misses versus the presidential-lean + incumbency system, while the same "
+                  "senator keeps running, and applies it to polled races as well (polls "
+                  "under-read the same incumbents again: carry-over 0.36, se 0.17, across 59 "
+                  "pairs where both races were polled). Measured across the 2002-24 record, "
+                  "last-miss -> next-miss slopes are +0.19 (one race), +0.28 (two) and +0.28 "
+                  "(three). Senators who beat the fundamentals by 8+ points twice running did "
+                  "NOT then repeat it on average (+0.2 vs -1.1 for all incumbents), so the "
+                  "effect is modest and mostly regresses; it is not a license to treat Collins "
+                  "as unbeatable. Her 2014 (-32) and 2020 (-8) misses move her 2026 race about "
+                  "3 points.",
+     "status": "Production",
+     "validation": "Full replay 2012-24, Senate: winner accuracy 90.9% -> 91.7%, toss-ups 71.4% "
+                   "-> 74.3%, Brier 0.0614 -> 0.0596, log loss 0.1942 -> 0.1914 (4 of 7 cycles "
+                   "better, 2 worse), error flat at 6.5 points. Weights 0.1-0.2 and one or two "
+                   "prior races give the same picture; higher weights worsen error.",
+     "decision": "track_record.PERSONAL_VOTE_WEIGHT[senate] = 0.15, PERSONAL_VOTE_PRIORS[senate] = "
+                 "2, PERSONAL_VOTE_ON_POLLS[senate] = True.",
+     "source": "User: account for a Susan Collins effect"},
+    {"id": "T-007",
+     "claim": "FIXED: odds on contested, well-polled Senate races were far too sharp "
+              "(Alaska 2026 at 1.5% for the Democrat with a tied polling average).",
+     "chamber": "both", "metric": "held-out log loss; upset rate at 4-8 point margins",
+     "mechanism": "One slope fitted on z = margin/sigma over every race let the many safe "
+                  "seats set the odds for contested ones. In the replay, Senate races predicted "
+                  "to be decided by 4-8 points were upset 27% of the time (8 of 30) -- yet "
+                  "polled races with a small sigma were being stated at 88% on average (75% "
+                  "actual). The calibration now uses sigma^0.5 and is fitted on contested races "
+                  "only (|margin| < 15). A flat probability cap was tested and rejected: stated "
+                  "chances above 95% were right 100% of the time in the Senate, so a cap only "
+                  "adds loss. Alaska's margin (R+5.3) was NOT changed: in the 20 past polled "
+                  "Senate races in Republican-leaning states with a near-tied polling average, "
+                  "the Democrat won 4, the mean result was R+3.8, and with a Republican "
+                  "incumbent running 0 of 7 -- the model's own margin on those was R+4.5.",
+     "status": "Production",
+     "validation": "Held-out (slope refit each cycle): House log loss 0.1243 -> 0.1106, Senate "
+                   "0.1388 -> 0.1372 on the calibration alone; the underdog's chance at Alaska-"
+                   "like inputs 1.8% -> 8.9-11.6%. Full replay 2012-24 with all 2026.23 changes: "
+                   "House log loss 0.1551, Brier 0.0453; Senate 0.1946, Brier 0.0586.",
+     "decision": "track_record.CALIBRATION_SIGMA_POWER = 0.5, CALIBRATION_CONTESTED = 15.",
+     "source": "User: Alaska should not be that far Republican"},
 ])
 
 # Claims whose mechanism the track-record model (T-004) no longer publishes. Kept
